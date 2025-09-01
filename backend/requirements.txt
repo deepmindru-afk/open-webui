@@ -102,7 +102,7 @@ PyJWT[crypto]==2.10.1
 authlib==1.6.1
 
 black==25.1.0
-youtube-transcript-api==1.1.0
+youtube-transcript-api==1.2.2
 pytube==15.0.0
 
 pydub
@@ -115,7 +115,7 @@ google-auth-oauthlib
 
 ## Tests
 docker~=7.1.0
-pytest~=8.3.5
+pytest~=8.4.1
 pytest-docker~=3.1.1
 
 googleapis-common-protos==1.63.2
