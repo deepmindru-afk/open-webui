@@ -128,12 +128,13 @@ def query_doc_with_hybrid_search(
             log.warning(f"query_doc_with_hybrid_search:no_docs {collection_name}")
             return {"documents": [], "metadatas": [], "distances": []}
 
-            log.debug(f"query_doc_with_hybrid_search:doc {collection_name}")
-            bm25_retriever = BM25Retriever.from_texts(
-                texts=collection_result.documents[0],
-                metadatas=collection_result.metadatas[0],
-            )
-            bm25_retriever.k = k
+        log.debug(f"query_doc_with_hybrid_search:doc {collection_name}")
+
+        bm25_retriever = BM25Retriever.from_texts(
+            texts=collection_result.documents[0],
+            metadatas=collection_result.metadatas[0],
+        )
+        bm25_retriever.k = k
 
         vector_search_retriever = VectorSearchRetriever(
             collection_name=collection_name,
@@ -498,9 +499,7 @@ def get_sources_from_items(
                     "documents": [
                         [item.get("file", {}).get("data", {}).get("content")]
                     ],
-                    "metadatas": [
-                        [item.get("file", {}).get("data", {}).get("meta", {})]
-                    ],
+                    "metadatas": [[item.get("file", {}).get("meta", {})]],
                 }
             else:
                 # Fallback to item content
