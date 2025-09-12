@@ -37,6 +37,7 @@
 		showArtifacts,
 		tools,
 		toolServers,
+		functions,
 		selectedFolder,
 		pinnedChats
 	} from '$lib/stores';
@@ -88,6 +89,7 @@
 	import Spinner from '../common/Spinner.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
+	import { getFunctions } from '$lib/apis/functions';
 
 	export let chatIdProp = '';
 
@@ -236,33 +238,58 @@
 	};
 
 	const resetInput = () => {
-		console.debug('resetInput');
-		setToolIds();
-
+		selectedToolIds = [];
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		codeInterpreterEnabled = false;
+
+		setDefaults();
 	};
 
-	const setToolIds = async () => {
+	const setDefaults = async () => {
 		if (!$tools) {
 			tools.set(await getTools(localStorage.token));
 		}
-
+		if (!$functions) {
+			functions.set(await getFunctions(localStorage.token));
+		}
 		if (selectedModels.length !== 1 && !atSelectedModel) {
 			return;
 		}
 
 		const model = atSelectedModel ?? $models.find((m) => m.id === selectedModels[0]);
-		if (model && model?.info?.meta?.toolIds) {
-			selectedToolIds = [
-				...new Set(
-					[...(model?.info?.meta?.toolIds ?? [])].filter((id) => $tools.find((t) => t.id === id))
-				)
-			];
-		} else {
-			selectedToolIds = [];
+		if (model) {
+			// Set Default Tools
+			if (model?.info?.meta?.toolIds) {
+				selectedToolIds = [
+					...new Set(
+						[...(model?.info?.meta?.toolIds ?? [])].filter((id) => $tools.find((t) => t.id === id))
+					)
+				];
+			}
+
+			// Set Default Filters (Toggleable only)
+			if (model?.info?.meta?.defaultFilterIds) {
+				selectedFilterIds = model.info.meta.defaultFilterIds.filter((id) =>
+					model?.filters?.find((f) => f.id === id)
+				);
+			}
+
+			// Set Default Features
+			if (model?.info?.meta?.defaultFeatureIds) {
+				if (model.info?.meta?.capabilities?.['image_generation']) {
+					imageGenerationEnabled = model.info.meta.defaultFeatureIds.includes('image_generation');
+				}
+
+				if (model.info?.meta?.capabilities?.['web_search']) {
+					webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
+				}
+
+				if (model.info?.meta?.capabilities?.['code_interpreter']) {
+					codeInterpreterEnabled = model.info.meta.defaultFeatureIds.includes('code_interpreter');
+				}
+			}
 		}
 	};
 
@@ -1466,7 +1493,9 @@
 		const messages = createMessagesList(history, history.currentId);
 		const _files = JSON.parse(JSON.stringify(files));
 
-		chatFiles.push(..._files.filter((item) => ['doc', 'file', 'collection'].includes(item.type)));
+		chatFiles.push(
+			..._files.filter((item) => ['doc', 'text', 'file', 'collection'].includes(item.type))
+		);
 		chatFiles = chatFiles.filter(
 			// Remove duplicates
 			(item, index, array) =>

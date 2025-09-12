@@ -79,12 +79,9 @@
 	<Tooltip content={$i18n.t('Integrations')} placement="top">
 		<slot />
 	</Tooltip>
-
-	<!-- class="w-full max-w-[240px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-850 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg transition max-h-96 overflow-y-auto scrollbar-thin" -->
-
 	<div slot="content">
 		<DropdownMenu.Content
-			class="w-full max-w-[240px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-850 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg max-h-72 overflow-y-auto scrollbar-thin"
+			class="w-full max-w-[240px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg max-h-72 overflow-y-auto scrollbar-thin"
 			sideOffset={4}
 			alignOffset={-6}
 			side="bottom"
@@ -139,17 +136,16 @@
 						}}
 					>
 						<div class="flex-1 truncate">
-							<Tooltip
-								content={tools[toolId]?.description ?? ''}
-								placement="top-start"
-								className="flex flex-1 gap-2 items-center"
-							>
-								<div class="shrink-0">
-									<Wrench />
-								</div>
-
-								<div class=" truncate">{tools[toolId].name}</div>
-							</Tooltip>
+							<div class="flex flex-1 gap-2 items-center">
+								<Tooltip content={tools[toolId]?.name ?? ''} placement="top">
+									<div class="shrink-0">
+										<Wrench />
+									</div>
+								</Tooltip>
+								<Tooltip content={tools[toolId]?.description ?? ''} placement="top-start">
+									<div class=" truncate">{tools[toolId].name}</div>
+								</Tooltip>
+							</div>
 						</div>
 
 						<div class=" shrink-0">

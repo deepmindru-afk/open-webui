@@ -3,7 +3,7 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { getContext, onMount, tick } from 'svelte';
 
-	import { config, user, tools as _tools, mobile } from '$lib/stores';
+	import { config, user, tools as _tools, mobile, knowledge, chats } from '$lib/stores';
 	import { createPicker } from '$lib/utils/google-drive-picker';
 
 	import { getTools } from '$lib/apis/tools';
@@ -14,6 +14,11 @@
 	import Camera from '$lib/components/icons/Camera.svelte';
 	import Note from '$lib/components/icons/Note.svelte';
 	import Clip from '$lib/components/icons/Clip.svelte';
+	import ChatBubbleOval from '$lib/components/icons/ChatBubbleOval.svelte';
+	import Refresh from '$lib/components/icons/Refresh.svelte';
+	import Agile from '$lib/components/icons/Agile.svelte';
+	import ClockRotateRight from '$lib/components/icons/ClockRotateRight.svelte';
+	import Database from '$lib/components/icons/Database.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -76,7 +81,7 @@
 
 	<div slot="content">
 		<DropdownMenu.Content
-			class="w-full max-w-[200px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-850 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg transition"
+			class="w-full max-w-[200px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg transition"
 			sideOffset={4}
 			alignOffset={-6}
 			side="bottom"
@@ -138,6 +143,39 @@
 				</DropdownMenu.Item>
 			</Tooltip>
 
+			{#if $config?.features?.enable_notes ?? false}
+				<Tooltip
+					content={fileUploadCapableModels.length !== selectedModels.length
+						? $i18n.t('Model(s) do not support file upload')
+						: !fileUploadEnabled
+							? $i18n.t('You do not have permission to upload files.')
+							: ''}
+					className="w-full"
+				>
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl {!fileUploadEnabled
+							? 'opacity-50'
+							: ''}"
+						on:click={() => {
+							if (fileUploadEnabled) {
+								if (!detectMobile()) {
+									screenCaptureHandler();
+								} else {
+									const cameraInputElement = document.getElementById('camera-input');
+
+									if (cameraInputElement) {
+										cameraInputElement.click();
+									}
+								}
+							}
+						}}
+					>
+						<Note />
+						<div class=" line-clamp-1">{$i18n.t('Attach Notes')}</div>
+					</DropdownMenu.Item>
+				</Tooltip>
+			{/if}
+
 			<Tooltip
 				content={fileUploadCapableModels.length !== selectedModels.length
 					? $i18n.t('Model(s) do not support file upload')
@@ -164,41 +202,43 @@
 						}
 					}}
 				>
-					<Note />
-					<div class=" line-clamp-1">{$i18n.t('Attach Notes')}</div>
-				</DropdownMenu.Item>
-			</Tooltip>
-
-			<Tooltip
-				content={fileUploadCapableModels.length !== selectedModels.length
-					? $i18n.t('Model(s) do not support file upload')
-					: !fileUploadEnabled
-						? $i18n.t('You do not have permission to upload files.')
-						: ''}
-				className="w-full"
-			>
-				<DropdownMenu.Item
-					class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl {!fileUploadEnabled
-						? 'opacity-50'
-						: ''}"
-					on:click={() => {
-						if (fileUploadEnabled) {
-							if (!detectMobile()) {
-								screenCaptureHandler();
-							} else {
-								const cameraInputElement = document.getElementById('camera-input');
-
-								if (cameraInputElement) {
-									cameraInputElement.click();
-								}
-							}
-						}
-					}}
-				>
-					<DocumentArrowUp />
+					<Database />
 					<div class=" line-clamp-1">{$i18n.t('Attach Knowledge')}</div>
 				</DropdownMenu.Item>
 			</Tooltip>
+
+			{#if ($chats ?? []).length > 0}
+				<Tooltip
+					content={fileUploadCapableModels.length !== selectedModels.length
+						? $i18n.t('Model(s) do not support file upload')
+						: !fileUploadEnabled
+							? $i18n.t('You do not have permission to upload files.')
+							: ''}
+					className="w-full"
+				>
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl {!fileUploadEnabled
+							? 'opacity-50'
+							: ''}"
+						on:click={() => {
+							if (fileUploadEnabled) {
+								if (!detectMobile()) {
+									screenCaptureHandler();
+								} else {
+									const cameraInputElement = document.getElementById('camera-input');
+
+									if (cameraInputElement) {
+										cameraInputElement.click();
+									}
+								}
+							}
+						}}
+					>
+						<ClockRotateRight />
+						<div class=" line-clamp-1">{$i18n.t('Reference Chats')}</div>
+					</DropdownMenu.Item>
+				</Tooltip>
+			{/if}
 
 			{#if fileUploadEnabled}
 				{#if $config?.features?.enable_google_drive_integration}
@@ -331,7 +371,7 @@
 							<div class="line-clamp-1">{$i18n.t('Microsoft OneDrive')}</div>
 						</DropdownMenu.SubTrigger>
 						<DropdownMenu.SubContent
-							class="w-[calc(100vw-2rem)] max-w-[280px] rounded-xl px-1 py-1 border border-gray-300/30 dark:border-gray-700/50 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-sm"
+							class="w-[calc(100vw-2rem)] max-w-[280px] rounded-xl px-1 py-1 border border-gray-100  dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-sm"
 							side={$mobile ? 'bottom' : 'right'}
 							sideOffset={$mobile ? 5 : 0}
 							alignOffset={$mobile ? 0 : -8}
