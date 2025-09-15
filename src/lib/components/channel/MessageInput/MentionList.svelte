@@ -15,7 +15,8 @@
 
 	const select = (index: number) => {
 		const item = filteredItems[index];
-		if (item) command(item);
+		// Add the "A:" prefix to the id to indicate it's an agent/assistant/ai model
+		if (item) command({ id: `A:${item.id}|${item.name}`, label: item.name });
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {
