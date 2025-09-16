@@ -430,7 +430,7 @@
 		<div class="w-full group">
 			<button
 				id="folder-{folderId}-button"
-				class="relative w-full py-1 px-1.5 rounded-lg flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-500 font-medium hover:bg-gray-100 dark:hover:bg-gray-900 transition {$selectedFolder?.id ===
+				class="relative w-full py-1 px-1.5 rounded-lg flex items-center gap-1.5 hover:bg-gray-100 dark:hover:bg-gray-900 transition {$selectedFolder?.id ===
 				folderId
 					? 'bg-gray-100 dark:bg-gray-900'
 					: ''}"
@@ -464,7 +464,7 @@
 				}}
 			>
 				<button
-					class="text-gray-300 dark:text-gray-600 transition-all p-[3px] dark:hover:bg-gray-850 rounded-lg"
+					class="text-gray-500 dark:text-gray-500 transition-all p-1 hover:bg-gray-200 dark:hover:bg-gray-850 rounded-lg"
 					on:click={(e) => {
 						e.stopPropagation();
 						open = !open;
@@ -472,22 +472,22 @@
 				>
 					{#if folders[folderId]?.meta?.icon}
 						<div class="flex group-hover:hidden transition-all">
-							<Emoji className="size-4" shortCode={folders[folderId].meta.icon} />
+							<Emoji className="size-3.5" shortCode={folders[folderId].meta.icon} />
 						</div>
 
 						<div class="hidden group-hover:flex transition-all p-[1px]">
 							{#if open}
-								<ChevronDown className=" size-3.5" strokeWidth="2.5" />
+								<ChevronDown className=" size-3" strokeWidth="2.5" />
 							{:else}
-								<ChevronRight className=" size-3.5" strokeWidth="2.5" />
+								<ChevronRight className=" size-3" strokeWidth="2.5" />
 							{/if}
 						</div>
 					{:else}
 						<div class="p-[1px]">
 							{#if open}
-								<ChevronDown className=" size-3.5" strokeWidth="2.5" />
+								<ChevronDown className=" size-3" strokeWidth="2.5" />
 							{:else}
-								<ChevronRight className=" size-3.5" strokeWidth="2.5" />
+								<ChevronRight className=" size-3" strokeWidth="2.5" />
 							{/if}
 						</div>
 					{/if}
@@ -518,7 +518,7 @@
 									edit = false;
 								}
 							}}
-							class="w-full h-full bg-transparent text-gray-500 dark:text-gray-500 outline-hidden"
+							class="w-full h-full bg-transparent outline-hidden"
 						/>
 					{:else}
 						{folders[folderId].name}
