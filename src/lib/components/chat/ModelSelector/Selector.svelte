@@ -344,7 +344,7 @@
 	closeFocus={false}
 >
 	<DropdownMenu.Trigger
-		class="relative w-full font-primary {($settings?.highContrastMode ?? false)
+		class="relative w-full {($settings?.highContrastMode ?? false)
 			? ''
 			: 'outline-hidden focus:outline-hidden'}"
 		aria-label={placeholder}
@@ -384,7 +384,7 @@
 	>
 		<slot>
 			{#if searchEnabled}
-				<div class="flex items-center gap-2.5 px-4 mt-3.5 mb-[5px]">
+				<div class="flex items-center gap-2.5 px-4.5 mt-3.5 mb-1.5">
 					<Search className="size-4" strokeWidth="2.5" />
 
 					<input
@@ -420,7 +420,7 @@
 			<div class="px-2">
 				{#if tags && items.filter((item) => !(item.model?.info?.meta?.hidden ?? false)).length > 0}
 					<div
-						class=" flex w-full bg-white dark:bg-gray-850 overflow-x-auto scrollbar-none mb-0.5"
+						class=" flex w-full bg-white dark:bg-gray-850 overflow-x-auto scrollbar-none font-[450] mb-0.5"
 						on:wheel={(e) => {
 							if (e.deltaY !== 0) {
 								e.preventDefault();
@@ -429,12 +429,12 @@
 						}}
 					>
 						<div
-							class="flex gap-1 w-fit text-center text-sm font-medium rounded-full bg-transparent px-1.5"
+							class="flex gap-1 w-fit text-center text-sm rounded-full bg-transparent px-1.5"
 							bind:this={tagsContainerElement}
 						>
 							{#if items.find((item) => item.model?.connection_type === 'local') || items.find((item) => item.model?.connection_type === 'external') || items.find((item) => item.model?.direct) || tags.length > 0}
 								<button
-									class="min-w-fit outline-none px-1.5 {selectedTag === '' &&
+									class="min-w-fit outline-none px-1.5 py-0.5 {selectedTag === '' &&
 									selectedConnectionType === ''
 										? ''
 										: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
@@ -512,7 +512,7 @@
 				{/if}
 			</div>
 
-			<div class="px-2 max-h-64 overflow-y-auto group relative">
+			<div class="px-2.5 max-h-64 overflow-y-auto group relative">
 				{#each filteredItems as item, index}
 					<ModelItem
 						{selectedModelIdx}
@@ -561,7 +561,7 @@
 						class="flex w-full justify-between font-medium select-none rounded-button py-2 pl-3 pr-1.5 text-sm text-gray-700 dark:text-gray-100 outline-hidden transition-all duration-75 rounded-xl cursor-pointer data-highlighted:bg-muted"
 					>
 						<div class="flex">
-							<div class="-ml-2 mr-2.5 translate-y-0.5">
+							<div class="mr-2.5 translate-y-0.5">
 								<Spinner />
 							</div>
 
@@ -618,7 +618,7 @@
 				{/each}
 			</div>
 
-			<div class="mb-3"></div>
+			<div class="mb-2.5"></div>
 
 			<div class="hidden w-[42rem]" />
 			<div class="hidden w-[32rem]" />
