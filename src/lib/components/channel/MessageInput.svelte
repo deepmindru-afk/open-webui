@@ -56,6 +56,9 @@
 	export let acceptFiles = true;
 	export let showFormattingToolbar = true;
 
+	export let userSuggestions = false;
+	export let channelSuggestions = false;
+
 	export let typingUsersClassName = 'from-white dark:from-gray-900';
 
 	let loaded = false;
@@ -563,9 +566,24 @@
 			{
 				char: '@',
 				render: getSuggestionRenderer(MentionList, {
-					i18n
+					i18n,
+					triggerChar: '@',
+					modelSuggestions: true,
+					userSuggestions
 				})
 			},
+			...(channelSuggestions
+				? [
+						{
+							char: '#',
+							render: getSuggestionRenderer(MentionList, {
+								i18n,
+								triggerChar: '#',
+								channelSuggestions
+							})
+						}
+					]
+				: []),
 			{
 				char: '/',
 				render: getSuggestionRenderer(CommandSuggestionList, {
@@ -870,7 +888,37 @@
 											}}
 											on:paste={async (e) => {
 												e = e.detail.event;
-												console.info(e);
+												console.log(e);
+
+												const clipboardData = e.clipboardData || window.clipboardData;
+
+												if (clipboardData && clipboardData.items) {
+													for (const item of clipboardData.items) {
+														if (item.type.indexOf('image') !== -1) {
+															const blob = item.getAsFile();
+															const reader = new FileReader();
+
+															reader.onload = function (e) {
+																files = [
+																	...files,
+																	{
+																		type: 'image',
+																		url: `${e.target.result}`
+																	}
+																];
+															};
+
+															reader.readAsDataURL(blob);
+														} else if (item?.kind === 'file') {
+															const file = item.getAsFile();
+															if (file) {
+																const _files = [file];
+																await inputFilesHandler(_files);
+																e.preventDefault();
+															}
+														}
+													}
+												}
 											}}
 										/>
 									{/key}
