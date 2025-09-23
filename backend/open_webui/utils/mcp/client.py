@@ -16,19 +16,25 @@ class MCPClient:
     async def connect(
         self, url: str, headers: Optional[dict] = None, auth: Optional[any] = None
     ):
-        self._streams_context = streamablehttp_client(url, headers=headers, auth=auth)
-        read_stream, write_stream, _ = (
-            await self._streams_context.__aenter__()
-        )  # pylint: disable=E1101
+        try:
+            self._streams_context = streamablehttp_client(
+                url, headers=headers, auth=auth
+            )
 
-        self._session_context = ClientSession(
-            read_stream, write_stream
-        )  # pylint: disable=W0201
-        self.session: ClientSession = (
-            await self._session_context.__aenter__()
-        )  # pylint: disable=C2801
+            transport = await self.exit_stack.enter_async_context(self._streams_context)
+            read_stream, write_stream, _ = transport
 
-        await self.session.initialize()
+            self._session_context = ClientSession(
+                read_stream, write_stream
+            )  # pylint: disable=W0201
+
+            self.session = await self.exit_stack.enter_async_context(
+                self._session_context
+            )
+            await self.session.initialize()
+        except Exception as e:
+            await self.disconnect()
+            raise e
 
     async def list_tool_specs(self) -> Optional[dict]:
         if not self.session:
@@ -63,7 +69,7 @@ class MCPClient:
         if not result:
             raise Exception("No result returned from MCP tool call.")
 
-        result_dict = result.model_dump()
+        result_dict = result.model_dump(mode="json")
         result_content = result_dict.get("content", {})
 
         if result.isError:
@@ -71,17 +77,33 @@ class MCPClient:
         else:
             return result_content
 
+    async def list_resources(self, cursor: Optional[str] = None) -> Optional[dict]:
+        if not self.session:
+            raise RuntimeError("MCP client is not connected.")
+
+        result = await self.session.list_resources(cursor=cursor)
+        if not result:
+            raise Exception("No result returned from MCP list_resources call.")
+
+        result_dict = result.model_dump()
+        resources = result_dict.get("resources", [])
+
+        return resources
+
+    async def read_resource(self, uri: str) -> Optional[dict]:
+        if not self.session:
+            raise RuntimeError("MCP client is not connected.")
+
+        result = await self.session.read_resource(uri)
+        if not result:
+            raise Exception("No result returned from MCP read_resource call.")
+        result_dict = result.model_dump()
+
+        return result_dict
+
     async def disconnect(self):
         # Clean up and close the session
-        if self.session:
-            await self._session_context.__aexit__(
-                None, None, None
-            )  # pylint: disable=E1101
-        if self._streams_context:
-            await self._streams_context.__aexit__(
-                None, None, None
-            )  # pylint: disable=E1101
-        self.session = None
+        await self.exit_stack.aclose()
 
     async def __aenter__(self):
         await self.exit_stack.__aenter__()
