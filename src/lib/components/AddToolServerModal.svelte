@@ -57,16 +57,26 @@
 			return;
 		}
 
-		const res = await registerOAuthClient(localStorage.token, {
-			url: url,
-			client_id: id
-		}).catch((err) => {
+		const res = await registerOAuthClient(
+			localStorage.token,
+			{
+				url: url,
+				client_id: id
+			},
+			'mcp'
+		).catch((err) => {
 			toast.error($i18n.t('Registration failed'));
 			return null;
 		});
 
 		if (res) {
+			toast.warning(
+				$i18n.t(
+					'Please save the connection to persist the OAuth client information and do not change the ID'
+				)
+			);
 			toast.success($i18n.t('Registration successful'));
+
 			console.debug('Registration successful', res);
 			oauthClientInfo = res?.oauth_client_info ?? null;
 		}
@@ -362,19 +372,6 @@
 
 									{#if auth_type === 'oauth_2.1'}
 										<div class="flex items-center gap-2">
-											{#if !oauthClientInfo}
-												<div
-													class="text-xs font-medium px-1 rounded-md bg-yellow-500/20 text-yellow-700 dark:text-yellow-200"
-												>
-													{$i18n.t('Not Registered')}
-												</div>
-											{:else}
-												<div
-													class="text-xs font-medium px-1 rounded-md bg-green-500/20 text-green-700 dark:text-green-200"
-												>
-													{$i18n.t('Registered')}
-												</div>
-											{/if}
 											<div class="flex flex-col justify-end items-center shrink-0">
 												<Tooltip
 													content={oauthClientInfo
@@ -392,6 +389,20 @@
 													</button>
 												</Tooltip>
 											</div>
+
+											{#if !oauthClientInfo}
+												<div
+													class="text-xs font-medium px-1.5 rounded-md bg-yellow-500/20 text-yellow-700 dark:text-yellow-200"
+												>
+													{$i18n.t('Not Registered')}
+												</div>
+											{:else}
+												<div
+													class="text-xs font-medium px-1.5 rounded-md bg-green-500/20 text-green-700 dark:text-green-200"
+												>
+													{$i18n.t('Registered')}
+												</div>
+											{/if}
 										</div>
 									{/if}
 								</div>
@@ -446,7 +457,7 @@
 											<div
 												class={`flex items-center text-xs self-center translate-y-[1px] ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
 											>
-												{$i18n.t('Uses ​OAuth 2.1 Dynamic Client Registration to authenticate')}
+												{$i18n.t('Uses ​OAuth 2.1 Dynamic Client Registration')}
 											</div>
 										{/if}
 									</div>
