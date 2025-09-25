@@ -50,6 +50,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response, StreamingResponse
 from starlette.datastructures import Headers
 
+from starsessions import (
+    SessionMiddleware as StarSessionsMiddleware,
+    SessionAutoloadMiddleware,
+)
+from starsessions.stores.redis import RedisStore
 
 from open_webui.utils import logger
 from open_webui.utils.audit import AuditLevel, AuditLoggingMiddleware
@@ -1878,13 +1883,34 @@ async def get_current_usage(user=Depends(get_verified_user)):
 
 # SessionMiddleware is used by authlib for oauth
 if len(OAUTH_PROVIDERS) > 0:
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=WEBUI_SECRET_KEY,
-        session_cookie="oui-session",
-        same_site=WEBUI_SESSION_COOKIE_SAME_SITE,
-        https_only=WEBUI_SESSION_COOKIE_SECURE,
-    )
+    try:
+        if REDIS_URL:
+            redis_session_store = RedisStore(
+                url=REDIS_URL,
+                prefix=(
+                    f"{REDIS_KEY_PREFIX}:session:" if REDIS_KEY_PREFIX else "session:"
+                ),
+            )
+
+            app.add_middleware(SessionAutoloadMiddleware)
+            app.add_middleware(
+                StarSessionsMiddleware,
+                store=redis_session_store,
+                cookie_name="oui-session",
+                cookie_same_site=WEBUI_SESSION_COOKIE_SAME_SITE,
+                cookie_https_only=WEBUI_SESSION_COOKIE_SECURE,
+            )
+            log.info("Using Redis for session")
+        else:
+            raise ValueError("No Redis URL provided")
+    except Exception as e:
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=WEBUI_SECRET_KEY,
+            session_cookie="oui-session",
+            same_site=WEBUI_SESSION_COOKIE_SAME_SITE,
+            https_only=WEBUI_SESSION_COOKIE_SECURE,
+        )
 
 
 @app.get("/oauth/{provider}/login")
