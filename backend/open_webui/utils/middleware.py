@@ -1096,7 +1096,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     tools_dict = {}
 
-    mcp_clients = []
+    mcp_clients = {}
     mcp_tools_dict = {}
 
     if tool_ids:
@@ -1157,35 +1157,41 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             log.error(f"Error getting OAuth token: {e}")
                             oauth_token = None
 
-                    mcp_client = MCPClient()
-                    await mcp_client.connect(
+                    mcp_clients[server_id] = MCPClient()
+                    await mcp_clients[server_id].connect(
                         url=mcp_server_connection.get("url", ""),
                         headers=headers if headers else None,
                     )
 
-                    tool_specs = await mcp_client.list_tool_specs()
+                    tool_specs = await mcp_clients[server_id].list_tool_specs()
                     for tool_spec in tool_specs:
 
-                        def make_tool_function(function_name):
+                        def make_tool_function(client, function_name):
                             async def tool_function(**kwargs):
-                                return await mcp_client.call_tool(
+                                print(kwargs)
+                                print(client)
+                                print(await client.list_tool_specs())
+                                return await client.call_tool(
                                     function_name,
                                     function_args=kwargs,
                                 )
 
                             return tool_function
 
-                        tool_function = make_tool_function(tool_spec["name"])
+                        tool_function = make_tool_function(
+                            mcp_clients[server_id], tool_spec["name"]
+                        )
 
-                        mcp_tools_dict[tool_spec["name"]] = {
-                            "spec": tool_spec,
+                        mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
+                            "spec": {
+                                **tool_spec,
+                                "name": f"{server_id}_{tool_spec['name']}",
+                            },
                             "callable": tool_function,
                             "type": "mcp",
-                            "client": mcp_client,
+                            "client": mcp_clients[server_id],
                             "direct": False,
                         }
-
-                    mcp_clients.append(mcp_client)
                 except Exception as e:
                     log.debug(e)
                     continue
@@ -1226,7 +1232,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 {"type": "function", "function": tool.get("spec", {})}
                 for tool in tools_dict.values()
             ]
-
         else:
             # If the function calling is not native, then call the tools function calling handler
             try:
@@ -2689,23 +2694,19 @@ async def process_chat_response(
 
                         tool_result_files = []
                         if isinstance(tool_result, list):
-                            for item in tool_result:
-                                # check if string
-                                if isinstance(item, str) and item.startswith("data:"):
-                                    tool_result_files.append(
-                                        {
-                                            "type": "data",
-                                            "content": item,
-                                        }
-                                    )
-                                    tool_result.remove(item)
-
-                                if tool.get("type") == "mcp":
+                            if tool.get("type") == "mcp":  # MCP
+                                tool_response = []
+                                for item in tool_result:
                                     if isinstance(item, dict):
-                                        if (
-                                            item.get("type") == "image"
-                                            or item.get("type") == "audio"
-                                        ):
+                                        if item.get("type") == "text":
+                                            text = item.get("text", "")
+                                            if isinstance(text, str):
+                                                try:
+                                                    text = json.loads(text)
+                                                except json.JSONDecodeError:
+                                                    pass
+                                            tool_response.append(text)
+                                        elif item.get("type") in ["image", "audio"]:
                                             file_url = get_file_url_from_base64(
                                                 request,
                                                 f"data:{item.get('mimeType')};base64,{item.get('data', item.get('blob', ''))}",
@@ -2730,7 +2731,24 @@ async def process_chat_response(
                                                     "url": file_url,
                                                 }
                                             )
-                                            tool_result.remove(item)
+                                tool_result = (
+                                    tool_response[0]
+                                    if len(tool_response) == 1
+                                    else tool_response
+                                )
+                            else:  # OpenAPI
+                                for item in tool_result:
+                                    # check if string
+                                    if isinstance(item, str) and item.startswith(
+                                        "data:"
+                                    ):
+                                        tool_result_files.append(
+                                            {
+                                                "type": "data",
+                                                "content": item,
+                                            }
+                                        )
+                                        tool_result.remove(item)
 
                         if tool_result_files:
                             if not isinstance(tool_result, list):
