@@ -2464,6 +2464,12 @@ DOCUMENT_INTELLIGENCE_KEY = PersistentConfig(
     os.getenv("DOCUMENT_INTELLIGENCE_KEY", ""),
 )
 
+MISTRAL_OCR_API_BASE_URL = PersistentConfig(
+    "MISTRAL_OCR_API_BASE_URL",
+    "rag.MISTRAL_OCR_API_BASE_URL",
+    os.getenv("MISTRAL_OCR_API_BASE_URL", "https://api.mistral.ai/v1"),
+)
+
 MISTRAL_OCR_API_KEY = PersistentConfig(
     "MISTRAL_OCR_API_KEY",
     "rag.mistral_ocr_api_key",
@@ -3344,6 +3350,29 @@ IMAGES_EDIT_GEMINI_API_KEY = PersistentConfig(
     os.getenv("IMAGES_EDIT_GEMINI_API_KEY", GEMINI_API_KEY),
 )
 
+
+IMAGES_EDIT_COMFYUI_BASE_URL = PersistentConfig(
+    "IMAGES_EDIT_COMFYUI_BASE_URL",
+    "images.edit.comfyui.base_url",
+    os.getenv("IMAGES_EDIT_COMFYUI_BASE_URL", ""),
+)
+IMAGES_EDIT_COMFYUI_API_KEY = PersistentConfig(
+    "IMAGES_EDIT_COMFYUI_API_KEY",
+    "images.edit.comfyui.api_key",
+    os.getenv("IMAGES_EDIT_COMFYUI_API_KEY", ""),
+)
+
+IMAGES_EDIT_COMFYUI_WORKFLOW = PersistentConfig(
+    "IMAGES_EDIT_COMFYUI_WORKFLOW",
+    "images.edit.comfyui.workflow",
+    os.getenv("IMAGES_EDIT_COMFYUI_WORKFLOW", ""),
+)
+
+IMAGES_EDIT_COMFYUI_WORKFLOW_NODES = PersistentConfig(
+    "IMAGES_EDIT_COMFYUI_WORKFLOW_NODES",
+    "images.edit.comfyui.nodes",
+    [],
+)
 
 ####################################
 # Audio
