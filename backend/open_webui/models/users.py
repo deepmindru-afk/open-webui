@@ -274,6 +274,9 @@ class UsersTable:
             else:
                 query = query.order_by(User.created_at.desc())
 
+            # Count BEFORE pagination
+            total = query.count()
+
             if skip:
                 query = query.offset(skip)
             if limit:
@@ -282,7 +285,7 @@ class UsersTable:
             users = query.all()
             return {
                 "users": [UserModel.model_validate(user) for user in users],
-                "total": db.query(User).count(),
+                "total": total,
             }
 
     def get_users_by_user_ids(self, user_ids: list[str]) -> list[UserModel]:
@@ -321,6 +324,13 @@ class UsersTable:
                     )
         except Exception:
             return None
+
+    def get_num_users_active_today(self) -> Optional[int]:
+        with get_db() as db:
+            current_timestamp = int(datetime.datetime.now().timestamp())
+            today_midnight_timestamp = current_timestamp - (current_timestamp % 86400)
+            query = db.query(User).filter(User.last_active_at > today_midnight_timestamp)
+            return query.count()
 
     def update_user_role_by_id(self, id: str, role: str) -> Optional[UserModel]:
         try:
