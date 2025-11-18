@@ -2149,6 +2149,21 @@ PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH = int(
     os.environ.get("PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH", "1536")
 )
 
+PGVECTOR_USE_HALFVEC = (
+    os.getenv("PGVECTOR_USE_HALFVEC", "false").lower() == "true"
+)
+
+if (
+    PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH > 2000
+    and not PGVECTOR_USE_HALFVEC
+):
+    raise ValueError(
+        "PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH is set to "
+        f"{PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH}, which exceeds the 2000 dimension limit of the "
+        "'vector' type. Set PGVECTOR_USE_HALFVEC=true to enable the 'halfvec' "
+        "type required for high-dimensional embeddings."
+    )
+
 PGVECTOR_CREATE_EXTENSION = (
     os.getenv("PGVECTOR_CREATE_EXTENSION", "true").lower() == "true"
 )
@@ -2197,6 +2212,40 @@ else:
         PGVECTOR_POOL_RECYCLE = int(PGVECTOR_POOL_RECYCLE)
     except Exception:
         PGVECTOR_POOL_RECYCLE = 3600
+
+PGVECTOR_INDEX_METHOD = os.getenv("PGVECTOR_INDEX_METHOD", "").strip().lower()
+if PGVECTOR_INDEX_METHOD not in ("ivfflat", "hnsw", ""):
+    PGVECTOR_INDEX_METHOD = ""
+
+PGVECTOR_HNSW_M = os.environ.get("PGVECTOR_HNSW_M", 16)
+
+if PGVECTOR_HNSW_M == "":
+    PGVECTOR_HNSW_M = 16
+else:
+    try:
+        PGVECTOR_HNSW_M = int(PGVECTOR_HNSW_M)
+    except Exception:
+        PGVECTOR_HNSW_M = 16
+
+PGVECTOR_HNSW_EF_CONSTRUCTION = os.environ.get("PGVECTOR_HNSW_EF_CONSTRUCTION", 64)
+
+if PGVECTOR_HNSW_EF_CONSTRUCTION == "":
+    PGVECTOR_HNSW_EF_CONSTRUCTION = 64
+else:
+    try:
+        PGVECTOR_HNSW_EF_CONSTRUCTION = int(PGVECTOR_HNSW_EF_CONSTRUCTION)
+    except Exception:
+        PGVECTOR_HNSW_EF_CONSTRUCTION = 64
+
+PGVECTOR_IVFFLAT_LISTS = os.environ.get("PGVECTOR_IVFFLAT_LISTS", 100)
+
+if PGVECTOR_IVFFLAT_LISTS == "":
+    PGVECTOR_IVFFLAT_LISTS = 100
+else:
+    try:
+        PGVECTOR_IVFFLAT_LISTS = int(PGVECTOR_IVFFLAT_LISTS)
+    except Exception:
+        PGVECTOR_IVFFLAT_LISTS = 100
 
 # Pinecone
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", None)
@@ -2811,6 +2860,26 @@ RAG_OLLAMA_API_KEY = PersistentConfig(
 ENABLE_RAG_LOCAL_WEB_FETCH = (
     os.getenv("ENABLE_RAG_LOCAL_WEB_FETCH", "False").lower() == "true"
 )
+
+
+DEFAULT_WEB_FETCH_FILTER_LIST = [
+    "!169.254.169.254",
+    "!fd00:ec2::254",
+    "!metadata.google.internal",
+    "!metadata.azure.com",
+    "!100.100.100.200",
+]
+
+web_fetch_filter_list = os.getenv("WEB_FETCH_FILTER_LIST", "")
+if web_fetch_filter_list == "":
+    web_fetch_filter_list = []
+else:
+    web_fetch_filter_list = [
+        item.strip() for item in web_fetch_filter_list.split(",") if item.strip()
+    ]
+
+WEB_FETCH_FILTER_LIST = list(set(DEFAULT_WEB_FETCH_FILTER_LIST + web_fetch_filter_list))
+
 
 YOUTUBE_LOADER_LANGUAGE = PersistentConfig(
     "YOUTUBE_LOADER_LANGUAGE",
