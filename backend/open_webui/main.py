@@ -160,6 +160,7 @@ from open_webui.config import (
     IMAGES_OPENAI_API_BASE_URL,
     IMAGES_OPENAI_API_VERSION,
     IMAGES_OPENAI_API_KEY,
+    IMAGES_OPENAI_API_PARAMS,
     IMAGES_GEMINI_API_BASE_URL,
     IMAGES_GEMINI_API_KEY,
     IMAGES_GEMINI_ENDPOINT_METHOD,
@@ -356,9 +357,9 @@ from open_webui.config import (
     JWT_EXPIRES_IN,
     ENABLE_SIGNUP,
     ENABLE_LOGIN_FORM,
-    ENABLE_API_KEY,
-    ENABLE_API_KEY_ENDPOINT_RESTRICTIONS,
-    API_KEY_ALLOWED_ENDPOINTS,
+    ENABLE_API_KEYS,
+    ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS,
+    API_KEYS_ALLOWED_ENDPOINTS,
     ENABLE_CHANNELS,
     ENABLE_NOTES,
     ENABLE_COMMUNITY_SHARING,
@@ -372,6 +373,7 @@ from open_webui.config import (
     PENDING_USER_OVERLAY_TITLE,
     DEFAULT_PROMPT_SUGGESTIONS,
     DEFAULT_MODELS,
+    DEFAULT_PINNED_MODELS,
     DEFAULT_ARENA_MODEL,
     MODEL_ORDER_LIST,
     EVALUATION_ARENA_MODELS,
@@ -740,11 +742,11 @@ app.state.config.WEBUI_URL = WEBUI_URL
 app.state.config.ENABLE_SIGNUP = ENABLE_SIGNUP
 app.state.config.ENABLE_LOGIN_FORM = ENABLE_LOGIN_FORM
 
-app.state.config.ENABLE_API_KEY = ENABLE_API_KEY
-app.state.config.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS = (
-    ENABLE_API_KEY_ENDPOINT_RESTRICTIONS
+app.state.config.ENABLE_API_KEYS = ENABLE_API_KEYS
+app.state.config.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS = (
+    ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS
 )
-app.state.config.API_KEY_ALLOWED_ENDPOINTS = API_KEY_ALLOWED_ENDPOINTS
+app.state.config.API_KEYS_ALLOWED_ENDPOINTS = API_KEYS_ALLOWED_ENDPOINTS
 
 app.state.config.JWT_EXPIRES_IN = JWT_EXPIRES_IN
 
@@ -753,6 +755,10 @@ app.state.config.ADMIN_EMAIL = ADMIN_EMAIL
 
 
 app.state.config.DEFAULT_MODELS = DEFAULT_MODELS
+app.state.config.DEFAULT_PINNED_MODELS = DEFAULT_PINNED_MODELS
+app.state.config.MODEL_ORDER_LIST = MODEL_ORDER_LIST
+
+
 app.state.config.DEFAULT_PROMPT_SUGGESTIONS = DEFAULT_PROMPT_SUGGESTIONS
 app.state.config.DEFAULT_USER_ROLE = DEFAULT_USER_ROLE
 
@@ -764,7 +770,6 @@ app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK
 app.state.config.USER_PERMISSIONS = USER_PERMISSIONS
 app.state.config.WEBHOOK_URL = WEBHOOK_URL
 app.state.config.BANNERS = WEBUI_BANNERS
-app.state.config.MODEL_ORDER_LIST = MODEL_ORDER_LIST
 
 
 app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
@@ -1094,6 +1099,7 @@ app.state.config.IMAGE_STEPS = IMAGE_STEPS
 app.state.config.IMAGES_OPENAI_API_BASE_URL = IMAGES_OPENAI_API_BASE_URL
 app.state.config.IMAGES_OPENAI_API_VERSION = IMAGES_OPENAI_API_VERSION
 app.state.config.IMAGES_OPENAI_API_KEY = IMAGES_OPENAI_API_KEY
+app.state.config.IMAGES_OPENAI_API_PARAMS = IMAGES_OPENAI_API_PARAMS
 
 app.state.config.IMAGES_GEMINI_API_BASE_URL = IMAGES_GEMINI_API_BASE_URL
 app.state.config.IMAGES_GEMINI_API_KEY = IMAGES_GEMINI_API_KEY
@@ -1284,11 +1290,11 @@ class APIKeyRestrictionMiddleware(BaseHTTPMiddleware):
         # Only apply restrictions if an sk- API key is used
         if token and token.startswith("sk-"):
             # Check if restrictions are enabled
-            if request.app.state.config.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS:
+            if request.app.state.config.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS:
                 allowed_paths = [
                     path.strip()
                     for path in str(
-                        request.app.state.config.API_KEY_ALLOWED_ENDPOINTS
+                        request.app.state.config.API_KEYS_ALLOWED_ENDPOINTS
                     ).split(",")
                     if path.strip()
                 ]
@@ -1331,7 +1337,7 @@ async def check_url(request: Request, call_next):
         request.headers.get("Authorization")
     )
 
-    request.state.enable_api_key = app.state.config.ENABLE_API_KEY
+    request.state.enable_api_keys = app.state.config.ENABLE_API_KEYS
     response = await call_next(request)
     process_time = int(time.time()) - start_time
     response.headers["X-Process-Time"] = str(process_time)
@@ -1837,7 +1843,7 @@ async def get_app_config(request: Request):
             "auth_trusted_header": bool(app.state.AUTH_TRUSTED_EMAIL_HEADER),
             "enable_signup_password_confirmation": ENABLE_SIGNUP_PASSWORD_CONFIRMATION,
             "enable_ldap": app.state.config.ENABLE_LDAP,
-            "enable_api_key": app.state.config.ENABLE_API_KEY,
+            "enable_api_keys": app.state.config.ENABLE_API_KEYS,
             "enable_signup": app.state.config.ENABLE_SIGNUP,
             "enable_login_form": app.state.config.ENABLE_LOGIN_FORM,
             "enable_websocket": ENABLE_WEBSOCKET_SUPPORT,
@@ -1875,6 +1881,7 @@ async def get_app_config(request: Request):
         **(
             {
                 "default_models": app.state.config.DEFAULT_MODELS,
+                "default_pinned_models": app.state.config.DEFAULT_PINNED_MODELS,
                 "default_prompt_suggestions": app.state.config.DEFAULT_PROMPT_SUGGESTIONS,
                 "user_count": user_count,
                 "code": {
