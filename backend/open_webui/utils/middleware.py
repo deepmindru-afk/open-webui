@@ -58,7 +58,7 @@ from open_webui.routers.memories import query_memory, QueryMemoryForm
 
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.files import (
-    get_audio_url_from_base64,
+    convert_markdown_base64_images,
     get_file_url_from_base64,
     get_image_url_from_base64,
 )
@@ -112,6 +112,7 @@ from open_webui.config import (
 from open_webui.env import (
     SRC_LOG_LEVELS,
     GLOBAL_LOG_LEVEL,
+    ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION,
     CHAT_RESPONSE_STREAM_DELTA_CHUNK_SIZE,
     CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES,
     BYPASS_MODEL_ACCESS_CONTROL,
@@ -790,42 +791,13 @@ async def chat_image_generation_handler(
     input_images = get_last_images(message_list)
 
     system_message_content = ""
-    if len(input_images) == 0:
-        # Create image(s)
-        if request.app.state.config.ENABLE_IMAGE_PROMPT_GENERATION:
-            try:
-                res = await generate_image_prompt(
-                    request,
-                    {
-                        "model": form_data["model"],
-                        "messages": form_data["messages"],
-                    },
-                    user,
-                )
 
-                response = res["choices"][0]["message"]["content"]
-
-                try:
-                    bracket_start = response.find("{")
-                    bracket_end = response.rfind("}") + 1
-
-                    if bracket_start == -1 or bracket_end == -1:
-                        raise Exception("No JSON object found in the response")
-
-                    response = response[bracket_start:bracket_end]
-                    response = json.loads(response)
-                    prompt = response.get("prompt", [])
-                except Exception as e:
-                    prompt = user_message
-
-            except Exception as e:
-                log.exception(e)
-                prompt = user_message
-
+    if len(input_images) > 0 and request.app.state.config.ENABLE_IMAGE_EDIT:
+        # Edit image(s)
         try:
-            images = await image_generations(
+            images = await image_edits(
                 request=request,
-                form_data=CreateImageForm(**{"prompt": prompt}),
+                form_data=EditImageForm(**{"prompt": prompt, "image": input_images}),
                 user=user,
             )
 
@@ -873,12 +845,43 @@ async def chat_image_generation_handler(
             )
 
             system_message_content = f"<context>Image generation was attempted but failed. The system is currently unable to generate the image. Tell the user that an error occurred: {error_message}</context>"
+
     else:
-        # Edit image(s)
+        # Create image(s)
+        if request.app.state.config.ENABLE_IMAGE_PROMPT_GENERATION:
+            try:
+                res = await generate_image_prompt(
+                    request,
+                    {
+                        "model": form_data["model"],
+                        "messages": form_data["messages"],
+                    },
+                    user,
+                )
+
+                response = res["choices"][0]["message"]["content"]
+
+                try:
+                    bracket_start = response.find("{")
+                    bracket_end = response.rfind("}") + 1
+
+                    if bracket_start == -1 or bracket_end == -1:
+                        raise Exception("No JSON object found in the response")
+
+                    response = response[bracket_start:bracket_end]
+                    response = json.loads(response)
+                    prompt = response.get("prompt", [])
+                except Exception as e:
+                    prompt = user_message
+
+            except Exception as e:
+                log.exception(e)
+                prompt = user_message
+
         try:
-            images = await image_edits(
+            images = await image_generations(
                 request=request,
-                form_data=EditImageForm(**{"prompt": prompt, "image": input_images}),
+                form_data=CreateImageForm(**{"prompt": prompt}),
                 user=user,
             )
 
@@ -1127,7 +1130,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             pass
 
     event_emitter = get_event_emitter(metadata)
-    event_call = get_event_call(metadata)
+    event_caller = get_event_call(metadata)
 
     oauth_token = None
     try:
@@ -1141,14 +1144,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     extra_params = {
         "__event_emitter__": event_emitter,
-        "__event_call__": event_call,
+        "__event_call__": event_caller,
         "__user__": user.model_dump() if isinstance(user, UserModel) else {},
         "__metadata__": metadata,
+        "__oauth_token__": oauth_token,
         "__request__": request,
         "__model__": model,
-        "__oauth_token__": oauth_token,
     }
-
     # Initialize events to store additional event to be sent to the client
     # Initialize contexts and citation
     if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
@@ -2678,6 +2680,11 @@ async def process_chat_response(
                                                     "type": "text",
                                                     "content": "",
                                                 }
+                                            )
+
+                                        if ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION:
+                                            value = convert_markdown_base64_images(
+                                                request, value, metadata, user
                                             )
 
                                         content = f"{content}{value}"
