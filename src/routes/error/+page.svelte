@@ -33,12 +33,12 @@
 						<br class=" " />
 						<br class=" " />
 						<a
-							class=" font-semibold underline"
+							class=" font-medium underline"
 							href="https://www.portalos.ru"
 							target="_blank">{$i18n.t('See readme.md for instructions')}</a
 						>
 						{$i18n.t('or')}
-						<a class=" font-semibold underline" href="https://www.portalos.ru" target="_blank"
+						<a class=" font-medium underline" href="https://www.portalos.ru" target="_blank"
 							>{$i18n.t('join us for help.')}</a
 						>
 					</div>
