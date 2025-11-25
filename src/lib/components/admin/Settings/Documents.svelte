@@ -38,9 +38,11 @@
 	let showResetUploadDirConfirm = false;
 	let showReindexConfirm = false;
 
-	let embeddingEngine = '';
-	let embeddingModel = '';
-	let embeddingBatchSize = 1;
+	let RAG_EMBEDDING_ENGINE = '';
+	let RAG_EMBEDDING_MODEL = '';
+	let RAG_EMBEDDING_BATCH_SIZE = 1;
+	let ENABLE_ASYNC_EMBEDDING = true;
+
 	let rerankingModel = '';
 
 	let OpenAIUrl = '';
@@ -64,7 +66,7 @@
 	let RAGConfig = null;
 
 	const embeddingModelUpdateHandler = async () => {
-		if (embeddingEngine === '' && embeddingModel.split('/').length - 1 > 1) {
+		if (RAG_EMBEDDING_ENGINE === '' && RAG_EMBEDDING_MODEL.split('/').length - 1 > 1) {
 			toast.error(
 				$i18n.t(
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
@@ -72,7 +74,7 @@
 			);
 			return;
 		}
-		if (embeddingEngine === 'ollama' && embeddingModel === '') {
+		if (RAG_EMBEDDING_ENGINE === 'ollama' && RAG_EMBEDDING_MODEL === '') {
 			toast.error(
 				$i18n.t(
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
@@ -81,7 +83,7 @@
 			return;
 		}
 
-		if (embeddingEngine === 'openai' && embeddingModel === '') {
+		if (RAG_EMBEDDING_ENGINE === 'openai' && RAG_EMBEDDING_MODEL === '') {
 			toast.error(
 				$i18n.t(
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
@@ -91,20 +93,26 @@
 		}
 
 		if (
-			embeddingEngine === 'azure_openai' &&
+			RAG_EMBEDDING_ENGINE === 'azure_openai' &&
 			(AzureOpenAIKey === '' || AzureOpenAIUrl === '' || AzureOpenAIVersion === '')
 		) {
 			toast.error($i18n.t('OpenAI URL/Key required.'));
 			return;
 		}
 
-		console.debug('Update embedding model attempt:', embeddingModel);
+		console.debug('Update embedding model attempt:', {
+			RAG_EMBEDDING_ENGINE,
+			RAG_EMBEDDING_MODEL,
+			RAG_EMBEDDING_BATCH_SIZE,
+			ENABLE_ASYNC_EMBEDDING
+		});
 
 		updateEmbeddingModelLoading = true;
 		const res = await updateEmbeddingConfig(localStorage.token, {
-			embedding_engine: embeddingEngine,
-			embedding_model: embeddingModel,
-			embedding_batch_size: embeddingBatchSize,
+			RAG_EMBEDDING_ENGINE: RAG_EMBEDDING_ENGINE,
+			RAG_EMBEDDING_MODEL: RAG_EMBEDDING_MODEL,
+			RAG_EMBEDDING_BATCH_SIZE: RAG_EMBEDDING_BATCH_SIZE,
+			ENABLE_ASYNC_EMBEDDING: ENABLE_ASYNC_EMBEDDING,
 			ollama_config: {
 				key: OllamaKey,
 				url: OllamaUrl
@@ -234,9 +242,10 @@
 		const embeddingConfig = await getEmbeddingConfig(localStorage.token);
 
 		if (embeddingConfig) {
-			embeddingEngine = embeddingConfig.embedding_engine;
-			embeddingModel = embeddingConfig.embedding_model;
-			embeddingBatchSize = embeddingConfig.embedding_batch_size ?? 1;
+			RAG_EMBEDDING_ENGINE = embeddingConfig.RAG_EMBEDDING_ENGINE;
+			RAG_EMBEDDING_MODEL = embeddingConfig.RAG_EMBEDDING_MODEL;
+			RAG_EMBEDDING_BATCH_SIZE = embeddingConfig.RAG_EMBEDDING_BATCH_SIZE ?? 1;
+			ENABLE_ASYNC_EMBEDDING = embeddingConfig.ENABLE_ASYNC_EMBEDDING ?? true;
 
 			OpenAIKey = embeddingConfig.openai_config.key;
 			OpenAIUrl = embeddingConfig.openai_config.url;
@@ -768,17 +777,17 @@
 								<div class="flex items-center relative">
 									<select
 										class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
-										bind:value={embeddingEngine}
+										bind:value={RAG_EMBEDDING_ENGINE}
 										placeholder={$i18n.t('Select an embedding model engine')}
 										on:change={(e) => {
 											if (e.target.value === 'ollama') {
-												embeddingModel = '';
+												RAG_EMBEDDING_MODEL = '';
 											} else if (e.target.value === 'openai') {
-												embeddingModel = 'text-embedding-3-small';
+												RAG_EMBEDDING_MODEL = 'text-embedding-3-small';
 											} else if (e.target.value === 'azure_openai') {
-												embeddingModel = 'text-embedding-3-small';
+												RAG_EMBEDDING_MODEL = 'text-embedding-3-small';
 											} else if (e.target.value === '') {
-												embeddingModel = 'sentence-transformers/all-MiniLM-L6-v2';
+												RAG_EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2';
 											}
 										}}
 									>
@@ -790,7 +799,7 @@
 								</div>
 							</div>
 
-							{#if embeddingEngine === 'openai'}
+							{#if RAG_EMBEDDING_ENGINE === 'openai'}
 								<div class="my-0.5 flex gap-2 pr-2">
 									<input
 										class="flex-1 w-full text-sm bg-transparent outline-hidden"
@@ -805,7 +814,7 @@
 										required={false}
 									/>
 								</div>
-							{:else if embeddingEngine === 'ollama'}
+							{:else if RAG_EMBEDDING_ENGINE === 'ollama'}
 								<div class="my-0.5 flex gap-2 pr-2">
 									<input
 										class="flex-1 w-full text-sm bg-transparent outline-hidden"
@@ -820,7 +829,7 @@
 										required={false}
 									/>
 								</div>
-							{:else if embeddingEngine === 'azure_openai'}
+							{:else if RAG_EMBEDDING_ENGINE === 'azure_openai'}
 								<div class="my-0.5 flex flex-col gap-2 pr-2 w-full">
 									<div class="flex gap-2">
 										<input
@@ -847,12 +856,12 @@
 							<div class=" mb-1 text-xs font-medium">{$i18n.t('Embedding Model')}</div>
 
 							<div class="">
-								{#if embeddingEngine === 'ollama'}
+								{#if RAG_EMBEDDING_ENGINE === 'ollama'}
 									<div class="flex w-full">
 										<div class="flex-1 mr-2">
 											<input
 												class="flex-1 w-full text-sm bg-transparent outline-hidden"
-												bind:value={embeddingModel}
+												bind:value={RAG_EMBEDDING_MODEL}
 												placeholder={$i18n.t('Set embedding model')}
 												required
 											/>
@@ -864,13 +873,13 @@
 											<input
 												class="flex-1 w-full text-sm bg-transparent outline-hidden"
 												placeholder={$i18n.t('Set embedding model (e.g. {{model}})', {
-													model: embeddingModel.slice(-40)
+													model: RAG_EMBEDDING_MODEL.slice(-40)
 												})}
-												bind:value={embeddingModel}
+												bind:value={RAG_EMBEDDING_MODEL}
 											/>
 										</div>
 
-										{#if embeddingEngine === ''}
+										{#if RAG_EMBEDDING_ENGINE === ''}
 											<button
 												class="px-2.5 bg-transparent text-gray-800 dark:bg-transparent dark:text-gray-100 rounded-lg transition"
 												on:click={() => {
@@ -910,7 +919,7 @@
 							</div>
 						</div>
 
-						{#if embeddingEngine === 'ollama' || embeddingEngine === 'openai' || embeddingEngine === 'azure_openai'}
+						{#if RAG_EMBEDDING_ENGINE === 'ollama' || RAG_EMBEDDING_ENGINE === 'openai' || RAG_EMBEDDING_ENGINE === 'azure_openai'}
 							<div class="  mb-2.5 flex w-full justify-between">
 								<div class=" self-center text-xs font-medium">
 									{$i18n.t('Embedding Batch Size')}
@@ -918,13 +927,29 @@
 
 								<div class="">
 									<input
-										bind:value={embeddingBatchSize}
+										bind:value={RAG_EMBEDDING_BATCH_SIZE}
 										type="number"
 										class=" bg-transparent text-center w-14 outline-none"
 										min="-2"
 										max="16000"
 										step="1"
 									/>
+								</div>
+							</div>
+
+							<div class="  mb-2.5 flex w-full justify-between">
+								<div class="self-center text-xs font-medium">
+									<Tooltip
+										content={$i18n.t(
+											'Runs embedding tasks concurrently to speed up processing. Turn off if rate limits become an issue.'
+										)}
+										placement="top-start"
+									>
+										{$i18n.t('Async Embedding Processing')}
+									</Tooltip>
+								</div>
+								<div class="flex items-center relative">
+									<Switch bind:state={ENABLE_ASYNC_EMBEDDING} />
 								</div>
 							</div>
 						{/if}
