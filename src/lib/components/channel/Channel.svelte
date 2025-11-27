@@ -5,7 +5,7 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	import { chatId, showSidebar, socket, user } from '$lib/stores';
+	import { chatId, channelId as _channelId, showSidebar, socket, user } from '$lib/stores';
 	import { getChannelById, getChannelMessages, sendMessage } from '$lib/apis/channels';
 
 	import Messages from './Messages.svelte';
@@ -62,6 +62,7 @@
 
 		currentId = id;
 		updateLastReadAt(id);
+		_channelId.set(id);
 
 		top = false;
 		messages = null;
@@ -220,12 +221,30 @@
 	onDestroy(() => {
 		// last read at
 		updateLastReadAt(id);
+		_channelId.set(null);
 		$socket?.off('events:channel', channelEventHandler);
 	});
 </script>
 
 <svelte:head>
-	<title>#{channel?.name ?? 'Channel'} • Open WebUI</title>
+	{#if channel?.type === 'dm'}
+		<title
+			>{channel?.name.trim() ||
+				channel?.users.reduce((a, e, i, arr) => {
+					if (e.id === $user?.id) {
+						return a;
+					}
+
+					if (a) {
+						return `${a}, ${e.name}`;
+					} else {
+						return e.name;
+					}
+				}, '')} • Open WebUI</title
+		>
+	{:else}
+		<title>#{channel?.name ?? 'Channel'} • Open WebUI</title>
+	{/if}
 </svelte:head>
 
 <div
