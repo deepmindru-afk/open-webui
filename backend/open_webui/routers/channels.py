@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 
 from open_webui.socket.main import (
+    emit_to_users,
+    enter_room_for_users,
     sio,
     get_user_ids_from_room,
 )
@@ -94,8 +96,12 @@ async def get_channels(request: Request, user=Depends(get_verified_user)):
         last_message_at = last_message.created_at if last_message else None
 
         channel_member = Channels.get_member_by_channel_and_user_id(channel.id, user.id)
-        unread_count = Messages.get_unread_message_count(
-            channel.id, user.id, channel_member.last_read_at if channel_member else None
+        unread_count = (
+            Messages.get_unread_message_count(
+                channel.id, user.id, channel_member.last_read_at
+            )
+            if channel_member
+            else 0
         )
 
         user_ids = None
@@ -137,7 +143,7 @@ async def get_all_channels(user=Depends(get_verified_user)):
 ############################
 
 
-@router.get("/dm/{user_id}", response_model=Optional[ChannelModel])
+@router.get("/users/{user_id}", response_model=Optional[ChannelModel])
 async def get_dm_channel_by_user_id(
     request: Request, user_id: str, user=Depends(get_verified_user)
 ):
@@ -152,6 +158,20 @@ async def get_dm_channel_by_user_id(
     try:
         existing_channel = Channels.get_dm_channel_by_user_ids([user.id, user_id])
         if existing_channel:
+            participant_ids = [
+                member.user_id
+                for member in Channels.get_members_by_channel_id(existing_channel.id)
+            ]
+
+            await emit_to_users(
+                "events:channel",
+                {"data": {"type": "channel:created"}},
+                participant_ids,
+            )
+            await enter_room_for_users(
+                f"channel:{existing_channel.id}", participant_ids
+            )
+
             Channels.update_member_active_status(existing_channel.id, user.id, True)
             return ChannelModel(**existing_channel.model_dump())
 
@@ -163,7 +183,23 @@ async def get_dm_channel_by_user_id(
             ),
             user.id,
         )
-        return ChannelModel(**channel.model_dump())
+
+        if channel:
+            participant_ids = [
+                member.user_id
+                for member in Channels.get_members_by_channel_id(channel.id)
+            ]
+
+            await emit_to_users(
+                "events:channel",
+                {"data": {"type": "channel:created"}},
+                participant_ids,
+            )
+            await enter_room_for_users(f"channel:{channel.id}", participant_ids)
+
+            return ChannelModel(**channel.model_dump())
+        else:
+            raise Exception("Error creating channel")
     except Exception as e:
         log.exception(e)
         raise HTTPException(
@@ -201,11 +237,42 @@ async def create_new_channel(
                 [user.id, *form_data.user_ids]
             )
             if existing_channel:
+                participant_ids = [
+                    member.user_id
+                    for member in Channels.get_members_by_channel_id(
+                        existing_channel.id
+                    )
+                ]
+                await emit_to_users(
+                    "events:channel",
+                    {"data": {"type": "channel:created"}},
+                    participant_ids,
+                )
+                await enter_room_for_users(
+                    f"channel:{existing_channel.id}", participant_ids
+                )
+
                 Channels.update_member_active_status(existing_channel.id, user.id, True)
                 return ChannelModel(**existing_channel.model_dump())
 
         channel = Channels.insert_new_channel(form_data, user.id)
-        return ChannelModel(**channel.model_dump())
+
+        if channel:
+            participant_ids = [
+                member.user_id
+                for member in Channels.get_members_by_channel_id(channel.id)
+            ]
+
+            await emit_to_users(
+                "events:channel",
+                {"data": {"type": "channel:created"}},
+                participant_ids,
+            )
+            await enter_room_for_users(f"channel:{channel.id}", participant_ids)
+
+            return ChannelModel(**channel.model_dump())
+        else:
+            raise Exception("Error creating channel")
     except Exception as e:
         log.exception(e)
         raise HTTPException(
@@ -219,8 +286,8 @@ async def create_new_channel(
 
 
 class ChannelFullResponse(ChannelResponse):
-    user_ids: Optional[list[str]] = None  # 'dm' channels only
-    users: Optional[list[UserIdNameResponse]] = None  # 'dm' channels only
+    user_ids: Optional[list[str]] = None  # 'group'/'dm' channels only
+    users: Optional[list[UserIdNameStatusResponse]] = None  # 'group'/'dm' channels only
 
     last_read_at: Optional[int] = None  # timestamp in epoch (time_ns)
     unread_count: int = 0
@@ -246,8 +313,11 @@ async def get_channel_by_id(id: str, user=Depends(get_verified_user)):
         user_ids = [
             member.user_id for member in Channels.get_members_by_channel_id(channel.id)
         ]
+
         users = [
-            UserIdNameResponse(**user.model_dump())
+            UserIdNameStatusResponse(
+                **{**user.model_dump(), "is_active": Users.is_user_active(user.id)}
+            )
             for user in Users.get_users_by_user_ids(user_ids)
         ]
 
@@ -261,6 +331,7 @@ async def get_channel_by_id(id: str, user=Depends(get_verified_user)):
                 **channel.model_dump(),
                 "user_ids": user_ids,
                 "users": users,
+                "is_manager": Channels.is_user_channel_manager(channel.id, user.id),
                 "write_access": True,
                 "user_count": len(user_ids),
                 "last_read_at": channel_member.last_read_at if channel_member else None,
@@ -291,6 +362,7 @@ async def get_channel_by_id(id: str, user=Depends(get_verified_user)):
                 **channel.model_dump(),
                 "user_ids": user_ids,
                 "users": users,
+                "is_manager": Channels.is_user_channel_manager(channel.id, user.id),
                 "write_access": write_access or user.role == "admin",
                 "user_count": user_count,
                 "last_read_at": channel_member.last_read_at if channel_member else None,
@@ -334,6 +406,7 @@ async def get_channel_members_by_id(
                 status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT()
             )
 
+    if channel.type == "dm":
         user_ids = [
             member.user_id for member in Channels.get_members_by_channel_id(channel.id)
         ]
@@ -349,11 +422,8 @@ async def get_channel_members_by_id(
             ],
             "total": total,
         }
-
     else:
-        filter = {
-            "roles": ["!pending"],
-        }
+        filter = {}
 
         if query:
             filter["query"] = query
@@ -362,10 +432,16 @@ async def get_channel_members_by_id(
         if direction:
             filter["direction"] = direction
 
-        permitted_ids = get_permitted_group_and_user_ids("read", channel.access_control)
-        if permitted_ids:
-            filter["user_ids"] = permitted_ids.get("user_ids")
-            filter["group_ids"] = permitted_ids.get("group_ids")
+        if channel.type == "group":
+            filter["channel_id"] = channel.id
+        else:
+            filter["roles"] = ["!pending"]
+            permitted_ids = get_permitted_group_and_user_ids(
+                "read", channel.access_control
+            )
+            if permitted_ids:
+                filter["user_ids"] = permitted_ids.get("user_ids")
+                filter["group_ids"] = permitted_ids.get("group_ids")
 
         result = Users.get_users(filter=filter, skip=skip, limit=limit)
 
@@ -411,6 +487,101 @@ async def update_is_active_member_by_id_and_user_id(
 
     Channels.update_member_active_status(channel.id, user.id, form_data.is_active)
     return True
+
+
+#################################################
+# AddMembersById
+#################################################
+
+
+class UpdateMembersForm(BaseModel):
+    user_ids: list[str] = []
+    group_ids: list[str] = []
+
+
+@router.post("/{id}/update/members/add")
+async def add_members_by_id(
+    request: Request,
+    id: str,
+    form_data: UpdateMembersForm,
+    user=Depends(get_verified_user),
+):
+    if user.role != "admin" and not has_permission(
+        user.id, "features.channels", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.UNAUTHORIZED,
+        )
+
+    channel = Channels.get_channel_by_id(id)
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND
+        )
+
+    if channel.user_id != user.id and user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT()
+        )
+
+    try:
+        memberships = Channels.add_members_to_channel(
+            channel.id, user.id, form_data.user_ids, form_data.group_ids
+        )
+
+        return memberships
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.DEFAULT()
+        )
+
+
+#################################################
+#
+#################################################
+
+
+class RemoveMembersForm(BaseModel):
+    user_ids: list[str] = []
+
+
+@router.post("/{id}/update/members/remove")
+async def remove_members_by_id(
+    request: Request,
+    id: str,
+    form_data: RemoveMembersForm,
+    user=Depends(get_verified_user),
+):
+    if user.role != "admin" and not has_permission(
+        user.id, "features.channels", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.UNAUTHORIZED,
+        )
+
+    channel = Channels.get_channel_by_id(id)
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND
+        )
+
+    if channel.user_id != user.id and user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT()
+        )
+
+    try:
+        deleted = Channels.remove_members_from_channel(channel.id, form_data.user_ids)
+
+        return deleted
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.DEFAULT()
+        )
 
 
 ############################
