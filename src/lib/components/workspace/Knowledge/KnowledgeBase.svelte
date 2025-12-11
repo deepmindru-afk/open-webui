@@ -27,7 +27,6 @@
 	import {
 		addFileToKnowledgeById,
 		getKnowledgeById,
-		getKnowledgeBases,
 		removeFileFromKnowledgeById,
 		resetKnowledgeById,
 		updateFileFromKnowledgeById,
@@ -423,13 +422,13 @@
 
 	// Helper function to maintain file paths within zip
 	const syncDirectoryHandler = async () => {
-		if ((knowledge?.files ?? []).length > 0) {
+		if (fileItems.length > 0) {
 			const res = await resetKnowledgeById(localStorage.token, id).catch((e) => {
 				toast.error(`${e}`);
 			});
 
 			if (res) {
-				knowledge = res;
+				fileItems = [];
 				toast.success($i18n.t('Knowledge reset successfully.'));
 
 				// Upload directory
@@ -534,7 +533,6 @@
 
 			if (res) {
 				toast.success($i18n.t('Knowledge updated successfully'));
-				_knowledge.set(await getKnowledgeBases(localStorage.token));
 			}
 		}, 1000);
 	};
@@ -565,6 +563,11 @@
 	const onDrop = async (e) => {
 		e.preventDefault();
 		dragged = false;
+
+		if (!knowledge?.write_access) {
+			toast.error($i18n.t('You do not have permission to upload files to this knowledge base.'));
+			return;
+		}
 
 		const handleUploadingFileFolder = (items) => {
 			for (const item of items) {
@@ -747,37 +750,44 @@
 								class="text-left w-full font-medium text-lg font-primary bg-transparent outline-hidden flex-1"
 								bind:value={knowledge.name}
 								placeholder={$i18n.t('Knowledge Name')}
+								disabled={!knowledge?.write_access}
 								on:input={() => {
 									changeDebounceHandler();
 								}}
 							/>
 
 							<div class="shrink-0 mr-2.5">
-								{#if (knowledge?.files ?? []).length}
+								{#if fileItemsTotal}
 									<div class="text-xs text-gray-500">
 										{$i18n.t('{{count}} files', {
-											count: (knowledge?.files ?? []).length
+											count: fileItemsTotal
 										})}
 									</div>
 								{/if}
 							</div>
 						</div>
 
-						<div class="self-center shrink-0">
-							<button
-								class="bg-gray-50 hover:bg-gray-100 text-black dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-white transition px-2 py-1 rounded-full flex gap-1 items-center"
-								type="button"
-								on:click={() => {
-									showAccessControlModal = true;
-								}}
-							>
-								<LockClosed strokeWidth="2.5" className="size-3.5" />
+						{#if knowledge?.write_access}
+							<div class="self-center shrink-0">
+								<button
+									class="bg-gray-50 hover:bg-gray-100 text-black dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-white transition px-2 py-1 rounded-full flex gap-1 items-center"
+									type="button"
+									on:click={() => {
+										showAccessControlModal = true;
+									}}
+								>
+									<LockClosed strokeWidth="2.5" className="size-3.5" />
 
-								<div class="text-sm font-medium shrink-0">
-									{$i18n.t('Access')}
-								</div>
-							</button>
-						</div>
+									<div class="text-sm font-medium shrink-0">
+										{$i18n.t('Access')}
+									</div>
+								</button>
+							</div>
+						{:else}
+							<div class="text-xs shrink-0 text-gray-500">
+								{$i18n.t('Read Only')}
+							</div>
+						{/if}
 					</div>
 
 					<div class="flex w-full">
@@ -786,6 +796,7 @@
 							class="text-left text-xs w-full text-gray-500 bg-transparent outline-hidden"
 							bind:value={knowledge.description}
 							placeholder={$i18n.t('Knowledge Description')}
+							disabled={!knowledge?.write_access}
 							on:input={() => {
 								changeDebounceHandler();
 							}}
@@ -812,22 +823,24 @@
 						}}
 					/>
 
-					<div>
-						<AddContentMenu
-							on:upload={(e) => {
-								if (e.detail.type === 'directory') {
-									uploadDirectoryHandler();
-								} else if (e.detail.type === 'text') {
-									showAddTextContentModal = true;
-								} else {
-									document.getElementById('files-input').click();
-								}
-							}}
-							on:sync={(e) => {
-								showSyncConfirmModal = true;
-							}}
-						/>
-					</div>
+					{#if knowledge?.write_access}
+						<div>
+							<AddContentMenu
+								on:upload={(e) => {
+									if (e.detail.type === 'directory') {
+										uploadDirectoryHandler();
+									} else if (e.detail.type === 'text') {
+										showAddTextContentModal = true;
+									} else {
+										document.getElementById('files-input').click();
+									}
+								}}
+								on:sync={(e) => {
+									showSyncConfirmModal = true;
+								}}
+							/>
+						</div>
+					{/if}
 				</div>
 			</div>
 
@@ -896,6 +909,7 @@
 									<div class=" flex overflow-y-auto h-full w-full scrollbar-hidden text-xs">
 										<Files
 											files={fileItems}
+											{knowledge}
 											{selectedFileId}
 											onClick={(fileId) => {
 												selectedFileId = fileId;
@@ -959,28 +973,31 @@
 											{selectedFile?.meta?.name}
 										</div>
 
-										<div>
-											<button
-												class="flex self-center w-fit text-sm py-1 px-2.5 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-												disabled={isSaving}
-												on:click={() => {
-													updateFileContentHandler();
-												}}
-											>
-												{$i18n.t('Save')}
-												{#if isSaving}
-													<div class="ml-2 self-center">
-														<Spinner />
-													</div>
-												{/if}
-											</button>
-										</div>
+										{#if knowledge?.write_access}
+											<div>
+												<button
+													class="flex self-center w-fit text-sm py-1 px-2.5 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+													disabled={isSaving}
+													on:click={() => {
+														updateFileContentHandler();
+													}}
+												>
+													{$i18n.t('Save')}
+													{#if isSaving}
+														<div class="ml-2 self-center">
+															<Spinner />
+														</div>
+													{/if}
+												</button>
+											</div>
+										{/if}
 									</div>
 
 									{#key selectedFile.id}
 										<textarea
 											class="w-full h-full text-sm outline-none resize-none px-3 py-2"
 											bind:value={selectedFileContent}
+											disabled={!knowledge?.write_access}
 											placeholder={$i18n.t('Add content here')}
 										/>
 									{/key}

@@ -16,6 +16,7 @@
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 
+	export let knowledge = null;
 	export let selectedFileId = null;
 	export let files = [];
 
@@ -42,13 +43,13 @@
 					<div class="flex gap-2 items-center line-clamp-1">
 						<div class="shrink-0">
 							{#if file?.status !== 'uploading'}
-								<DocumentPage className="size-3" />
+								<DocumentPage className="size-3.5" />
 							{:else}
-								<Spinner className="size-3" />
+								<Spinner className="size-3.5" />
 							{/if}
 						</div>
 
-						<div class="line-clamp-1">
+						<div class="line-clamp-1 text-sm">
 							{file?.name ?? file?.meta?.name}
 							{#if file?.meta?.size}
 								<span class="text-xs text-gray-500">{formatFileSize(file?.meta?.size)}</span>
@@ -79,19 +80,21 @@
 				</div>
 			</button>
 
-			<div class="flex items-center">
-				<Tooltip content={$i18n.t('Delete')}>
-					<button
-						class="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-850 transition"
-						type="button"
-						on:click={() => {
-							onDelete(file?.id ?? file?.tempId);
-						}}
-					>
-						<XMark />
-					</button>
-				</Tooltip>
-			</div>
+			{#if knowledge?.write_access}
+				<div class="flex items-center">
+					<Tooltip content={$i18n.t('Delete')}>
+						<button
+							class="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-850 transition"
+							type="button"
+							on:click={() => {
+								onDelete(file?.id ?? file?.tempId);
+							}}
+						>
+							<XMark />
+						</button>
+					</Tooltip>
+				</div>
+			{/if}
 		</div>
 	{/each}
 </div>
