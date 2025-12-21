@@ -93,7 +93,9 @@
 
 	const i18n = getContext('i18n');
 
+	export let onUpload: Function = (e) => {};
 	export let onChange: Function = () => {};
+
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
 
@@ -848,7 +850,7 @@
 								}
 							];
 						} else {
-							dispatch('upload', e);
+							onUpload(e);
 						}
 					}
 				})
@@ -883,7 +885,7 @@
 								}
 							];
 						} else {
-							dispatch('upload', e);
+							onUpload(e);
 						}
 					}
 				})
@@ -918,7 +920,7 @@
 								}
 							];
 						} else {
-							dispatch('upload', e);
+							onUpload(e);
 						}
 					}
 				})
@@ -1487,9 +1489,7 @@
 												console.error('OneDrive Error:', error);
 											}
 										}}
-										onUpload={async (e) => {
-											dispatch('upload', e);
-										}}
+										{onUpload}
 										onClose={async () => {
 											await tick();
 
