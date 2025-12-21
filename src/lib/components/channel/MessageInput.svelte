@@ -112,25 +112,19 @@
 
 			const clipboardItems = await navigator.clipboard.read();
 
-			let imageUrl = null;
 			for (const item of clipboardItems) {
 				// Check for known image types
 				for (const type of item.types) {
 					if (type.startsWith('image/')) {
+						// get as file
 						const blob = await item.getType(type);
-						imageUrl = URL.createObjectURL(blob);
+						const file = new File([blob], `clipboard-image.${type.split('/')[1]}`, {
+							type: type
+						});
+
+						inputFilesHandler([file]);
 					}
 				}
-			}
-
-			if (imageUrl) {
-				files = [
-					...files,
-					{
-						type: 'image',
-						url: imageUrl
-					}
-				];
 			}
 
 			text = text.replaceAll('{{CLIPBOARD}}', clipboardText);
@@ -340,8 +334,9 @@
 
 			// Convert the canvas to a Base64 image URL
 			const imageUrl = canvas.toDataURL('image/png');
-			// Add the captured image to the files array to render it
-			files = [...files, { type: 'image', url: imageUrl }];
+			const blob = await (await fetch(imageUrl)).blob();
+			const file = new File([blob], `screen-capture-${Date.now()}.png`, { type: 'image/png' });
+			inputFilesHandler([file]);
 			// Clean memory: Clear video srcObject
 			video.srcObject = null;
 		} catch (error) {
@@ -931,28 +926,11 @@
 
 												if (clipboardData && clipboardData.items) {
 													for (const item of clipboardData.items) {
-														if (item.type.indexOf('image') !== -1) {
-															const blob = item.getAsFile();
-															const reader = new FileReader();
-
-															reader.onload = function (e) {
-																files = [
-																	...files,
-																	{
-																		type: 'image',
-																		url: `${e.target.result}`
-																	}
-																];
-															};
-
-															reader.readAsDataURL(blob);
-														} else if (item?.kind === 'file') {
-															const file = item.getAsFile();
-															if (file) {
-																const _files = [file];
-																await inputFilesHandler(_files);
-																e.preventDefault();
-															}
+														const file = item.getAsFile();
+														if (file) {
+															const _files = [file];
+															await inputFilesHandler(_files);
+															e.preventDefault();
 														}
 													}
 												}
