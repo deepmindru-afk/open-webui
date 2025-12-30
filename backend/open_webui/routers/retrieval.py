@@ -496,6 +496,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         "RAG_EXTERNAL_RERANKER_TIMEOUT": request.app.state.config.RAG_EXTERNAL_RERANKER_TIMEOUT,
         # Chunking settings
         "TEXT_SPLITTER": request.app.state.config.TEXT_SPLITTER,
+        "ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER": request.app.state.config.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER,
         "CHUNK_SIZE": request.app.state.config.CHUNK_SIZE,
         "CHUNK_OVERLAP": request.app.state.config.CHUNK_OVERLAP,
         # File upload settings
@@ -685,6 +686,7 @@ class ConfigForm(BaseModel):
 
     # Chunking settings
     TEXT_SPLITTER: Optional[str] = None
+    ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER: Optional[bool] = None
     CHUNK_SIZE: Optional[int] = None
     CHUNK_OVERLAP: Optional[int] = None
 
@@ -1190,6 +1192,7 @@ async def update_rag_config(
         # Chunking settings
         "TEXT_SPLITTER": request.app.state.config.TEXT_SPLITTER,
         "CHUNK_SIZE": request.app.state.config.CHUNK_SIZE,
+        "ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER": request.app.state.config.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER,
         "CHUNK_OVERLAP": request.app.state.config.CHUNK_OVERLAP,
         # File upload settings
         "FILE_MAX_SIZE": request.app.state.config.FILE_MAX_SIZE,
@@ -1312,6 +1315,38 @@ def save_docs_to_vector_db(
                 raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
 
     if split:
+        if request.app.state.config.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER:
+            log.info("Using markdown header text splitter")
+
+            # Define headers to split on - covering most common markdown header levels
+            markdown_splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=[
+                    ("#", "Header 1"),
+                    ("##", "Header 2"),
+                    ("###", "Header 3"),
+                    ("####", "Header 4"),
+                    ("#####", "Header 5"),
+                    ("######", "Header 6"),
+                ],
+                strip_headers=False,  # Keep headers in content for context
+            )
+
+            split_docs = []
+            for doc in docs:
+                split_docs.extend(
+                    [
+                        Document(
+                            page_content=split_chunk.page_content,
+                            metadata={**doc.metadata},
+                        )
+                        for split_chunk in markdown_splitter.split_text(
+                            doc.page_content
+                        )
+                    ]
+                )
+
+            docs = split_docs
+
         if request.app.state.config.TEXT_SPLITTER in ["", "character"]:
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=request.app.state.config.CHUNK_SIZE,
@@ -1332,52 +1367,6 @@ def save_docs_to_vector_db(
                 add_start_index=True,
             )
             docs = text_splitter.split_documents(docs)
-        elif request.app.state.config.TEXT_SPLITTER == "markdown_header":
-            log.info("Using markdown header text splitter")
-
-            # Define headers to split on - covering most common markdown header levels
-            headers_to_split_on = [
-                ("#", "Header 1"),
-                ("##", "Header 2"),
-                ("###", "Header 3"),
-                ("####", "Header 4"),
-                ("#####", "Header 5"),
-                ("######", "Header 6"),
-            ]
-
-            markdown_splitter = MarkdownHeaderTextSplitter(
-                headers_to_split_on=headers_to_split_on,
-                strip_headers=False,  # Keep headers in content for context
-            )
-
-            md_split_docs = []
-            for doc in docs:
-                md_header_splits = markdown_splitter.split_text(doc.page_content)
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=request.app.state.config.CHUNK_SIZE,
-                    chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                    add_start_index=True,
-                )
-                md_header_splits = text_splitter.split_documents(md_header_splits)
-
-                # Convert back to Document objects, preserving original metadata
-                for split_chunk in md_header_splits:
-                    headings_list = []
-                    # Extract header values in order based on headers_to_split_on
-                    for _, header_meta_key_name in headers_to_split_on:
-                        if header_meta_key_name in split_chunk.metadata:
-                            headings_list.append(
-                                split_chunk.metadata[header_meta_key_name]
-                            )
-
-                    md_split_docs.append(
-                        Document(
-                            page_content=split_chunk.page_content,
-                            metadata={**doc.metadata, "headings": headings_list},
-                        )
-                    )
-
-            docs = md_split_docs
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
 
@@ -2424,7 +2413,11 @@ class DeleteForm(BaseModel):
 
 
 @router.post("/delete")
-def delete_entries_from_collection(form_data: DeleteForm, user=Depends(get_admin_user), db: Session = Depends(get_session)):
+def delete_entries_from_collection(
+    form_data: DeleteForm,
+    user=Depends(get_admin_user),
+    db: Session = Depends(get_session),
+):
     try:
         if VECTOR_DB_CLIENT.has_collection(collection_name=form_data.collection_name):
             file = Files.get_file_by_id(form_data.file_id, db=db)
@@ -2566,7 +2559,9 @@ async def process_files_batch(
 
             # Update all files with collection name
             for file_update, file_result in zip(file_updates, file_results):
-                Files.update_file_by_id(id=file_result.file_id, form_data=file_update, db=db)
+                Files.update_file_by_id(
+                    id=file_result.file_id, form_data=file_update, db=db
+                )
                 file_result.status = "completed"
 
         except Exception as e:
