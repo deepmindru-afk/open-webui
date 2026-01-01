@@ -1543,6 +1543,12 @@ ENABLE_FOLDERS = PersistentConfig(
     os.environ.get("ENABLE_FOLDERS", "True").lower() == "true",
 )
 
+FOLDER_MAX_FILE_COUNT = PersistentConfig(
+    "FOLDER_MAX_FILE_COUNT",
+    "folders.max_file_count",
+    int(os.environ.get("FOLDER_MAX_FILE_COUNT", "100")),
+)
+
 ENABLE_CHANNELS = PersistentConfig(
     "ENABLE_CHANNELS",
     "channels.enable",
@@ -3186,6 +3192,12 @@ JINA_API_KEY = PersistentConfig(
     os.getenv("JINA_API_KEY", ""),
 )
 
+JINA_API_BASE_URL = PersistentConfig(
+    "JINA_API_BASE_URL",
+    "rag.web.search.jina_api_base_url",
+    os.getenv("JINA_API_BASE_URL", ""),
+)
+
 SEARCHAPI_API_KEY = PersistentConfig(
     "SEARCHAPI_API_KEY",
     "rag.web.search.searchapi_api_key",
@@ -3318,6 +3330,12 @@ FIRECRAWL_API_BASE_URL = PersistentConfig(
     "FIRECRAWL_API_BASE_URL",
     "rag.web.loader.firecrawl_api_url",
     os.environ.get("FIRECRAWL_API_BASE_URL", "https://api.firecrawl.dev"),
+)
+
+FIRECRAWL_TIMEOUT = PersistentConfig(
+    "FIRECRAWL_TIMEOUT",
+    "rag.web.loader.firecrawl_timeout",
+    os.environ.get("FIRECRAWL_TIMEOUT", ""),
 )
 
 EXTERNAL_WEB_SEARCH_URL = PersistentConfig(

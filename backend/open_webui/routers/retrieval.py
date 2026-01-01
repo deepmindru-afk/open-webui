@@ -112,6 +112,7 @@ from open_webui.env import (
     SENTENCE_TRANSFORMERS_MODEL_KWARGS,
     SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND,
     SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS,
+    SENTENCE_TRANSFORMERS_CROSS_ENCODER_SIGMOID_ACTIVATION_FUNCTION,
 )
 
 from open_webui.constants import ERROR_MESSAGES
@@ -190,6 +191,7 @@ def get_rf(
                     raise Exception(ERROR_MESSAGES.DEFAULT(e))
             else:
                 import sentence_transformers
+                import torch
 
                 try:
                     rf = sentence_transformers.CrossEncoder(
@@ -198,6 +200,11 @@ def get_rf(
                         trust_remote_code=RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
                         backend=SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND,
                         model_kwargs=SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS,
+                        activation_fn=(
+                            torch.nn.Sigmoid()
+                            if SENTENCE_TRANSFORMERS_CROSS_ENCODER_SIGMOID_ACTIVATION_FUNCTION
+                            else None
+                        ),
                     )
                 except Exception as e:
                     log.error(f"CrossEncoder: {e}")
@@ -541,6 +548,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             "SERPAPI_API_KEY": request.app.state.config.SERPAPI_API_KEY,
             "SERPAPI_ENGINE": request.app.state.config.SERPAPI_ENGINE,
             "JINA_API_KEY": request.app.state.config.JINA_API_KEY,
+            "JINA_API_BASE_URL": request.app.state.config.JINA_API_BASE_URL,
             "BING_SEARCH_V7_ENDPOINT": request.app.state.config.BING_SEARCH_V7_ENDPOINT,
             "BING_SEARCH_V7_SUBSCRIPTION_KEY": request.app.state.config.BING_SEARCH_V7_SUBSCRIPTION_KEY,
             "EXA_API_KEY": request.app.state.config.EXA_API_KEY,
@@ -557,6 +565,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             "PLAYWRIGHT_TIMEOUT": request.app.state.config.PLAYWRIGHT_TIMEOUT,
             "FIRECRAWL_API_KEY": request.app.state.config.FIRECRAWL_API_KEY,
             "FIRECRAWL_API_BASE_URL": request.app.state.config.FIRECRAWL_API_BASE_URL,
+            "FIRECRAWL_TIMEOUT": request.app.state.config.FIRECRAWL_TIMEOUT,
             "TAVILY_EXTRACT_DEPTH": request.app.state.config.TAVILY_EXTRACT_DEPTH,
             "EXTERNAL_WEB_SEARCH_URL": request.app.state.config.EXTERNAL_WEB_SEARCH_URL,
             "EXTERNAL_WEB_SEARCH_API_KEY": request.app.state.config.EXTERNAL_WEB_SEARCH_API_KEY,
@@ -601,6 +610,7 @@ class WebConfig(BaseModel):
     SERPAPI_API_KEY: Optional[str] = None
     SERPAPI_ENGINE: Optional[str] = None
     JINA_API_KEY: Optional[str] = None
+    JINA_API_BASE_URL: Optional[str] = None
     BING_SEARCH_V7_ENDPOINT: Optional[str] = None
     BING_SEARCH_V7_SUBSCRIPTION_KEY: Optional[str] = None
     EXA_API_KEY: Optional[str] = None
@@ -617,6 +627,7 @@ class WebConfig(BaseModel):
     PLAYWRIGHT_TIMEOUT: Optional[int] = None
     FIRECRAWL_API_KEY: Optional[str] = None
     FIRECRAWL_API_BASE_URL: Optional[str] = None
+    FIRECRAWL_TIMEOUT: Optional[str] = None
     TAVILY_EXTRACT_DEPTH: Optional[str] = None
     EXTERNAL_WEB_SEARCH_URL: Optional[str] = None
     EXTERNAL_WEB_SEARCH_API_KEY: Optional[str] = None
@@ -1085,6 +1096,7 @@ async def update_rag_config(
         request.app.state.config.SERPAPI_API_KEY = form_data.web.SERPAPI_API_KEY
         request.app.state.config.SERPAPI_ENGINE = form_data.web.SERPAPI_ENGINE
         request.app.state.config.JINA_API_KEY = form_data.web.JINA_API_KEY
+        request.app.state.config.JINA_API_BASE_URL = form_data.web.JINA_API_BASE_URL
         request.app.state.config.BING_SEARCH_V7_ENDPOINT = (
             form_data.web.BING_SEARCH_V7_ENDPOINT
         )
@@ -1116,6 +1128,7 @@ async def update_rag_config(
         request.app.state.config.FIRECRAWL_API_BASE_URL = (
             form_data.web.FIRECRAWL_API_BASE_URL
         )
+        request.app.state.config.FIRECRAWL_TIMEOUT = form_data.web.FIRECRAWL_TIMEOUT
         request.app.state.config.EXTERNAL_WEB_SEARCH_URL = (
             form_data.web.EXTERNAL_WEB_SEARCH_URL
         )
@@ -1236,6 +1249,7 @@ async def update_rag_config(
             "SERPAPI_API_KEY": request.app.state.config.SERPAPI_API_KEY,
             "SERPAPI_ENGINE": request.app.state.config.SERPAPI_ENGINE,
             "JINA_API_KEY": request.app.state.config.JINA_API_KEY,
+            "JINA_API_BASE_URL": request.app.state.config.JINA_API_BASE_URL,
             "BING_SEARCH_V7_ENDPOINT": request.app.state.config.BING_SEARCH_V7_ENDPOINT,
             "BING_SEARCH_V7_SUBSCRIPTION_KEY": request.app.state.config.BING_SEARCH_V7_SUBSCRIPTION_KEY,
             "EXA_API_KEY": request.app.state.config.EXA_API_KEY,
@@ -1252,6 +1266,7 @@ async def update_rag_config(
             "PLAYWRIGHT_TIMEOUT": request.app.state.config.PLAYWRIGHT_TIMEOUT,
             "FIRECRAWL_API_KEY": request.app.state.config.FIRECRAWL_API_KEY,
             "FIRECRAWL_API_BASE_URL": request.app.state.config.FIRECRAWL_API_BASE_URL,
+            "FIRECRAWL_TIMEOUT": request.app.state.config.FIRECRAWL_TIMEOUT,
             "TAVILY_EXTRACT_DEPTH": request.app.state.config.TAVILY_EXTRACT_DEPTH,
             "EXTERNAL_WEB_SEARCH_URL": request.app.state.config.EXTERNAL_WEB_SEARCH_URL,
             "EXTERNAL_WEB_SEARCH_API_KEY": request.app.state.config.EXTERNAL_WEB_SEARCH_API_KEY,
@@ -2016,6 +2031,7 @@ def search_web(
             request.app.state.config.JINA_API_KEY,
             query,
             request.app.state.config.WEB_SEARCH_RESULT_COUNT,
+            request.app.state.config.JINA_API_BASE_URL,
         )
     elif engine == "bing":
         return search_bing(
