@@ -726,6 +726,8 @@ def get_images_from_messages(message_list):
         for file in message.get("files", []):
             if file.get("type") == "image":
                 message_images.append(file.get("url"))
+            elif file.get("content_type", "").startswith("image/"):
+                message_images.append(file.get("url"))
 
         if message_images:
             images.append(message_images)
@@ -1198,6 +1200,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         "__oauth_token__": oauth_token,
         "__request__": request,
         "__model__": model,
+        "__chat_id__": metadata.get("chat_id"),
+        "__message_id__": metadata.get("message_id"),
     }
     # Initialize events to store additional event to be sent to the client
     # Initialize contexts and citation
