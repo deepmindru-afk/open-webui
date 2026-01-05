@@ -9,6 +9,7 @@ IMPORTANT: DO NOT IMPORT THIS MODULE DIRECTLY IN OTHER PARTS OF THE CODEBASE.
 import json
 import logging
 import time
+import asyncio
 from typing import Optional
 
 from fastapi import Request
@@ -190,7 +191,7 @@ async def fetch_url(
         return json.dumps({"error": "Request context not available"})
 
     try:
-        content, _ = get_content_from_url(__request__, url)
+        content, _ = await asyncio.to_thread(get_content_from_url, __request__, url)
 
         # Truncate if too long (avoid overwhelming context)
         max_length = 50000
@@ -244,6 +245,15 @@ async def generate_image(
                     },
                 }
             )
+            # Return a message indicating the image is already displayed
+            return json.dumps(
+                {
+                    "status": "success",
+                    "message": "The image has been successfully generated and is already visible to the user in the chat. You do not need to display or embed the image again - just acknowledge that it has been created.",
+                    "images": images,
+                },
+                ensure_ascii=False,
+            )
 
         return json.dumps({"status": "success", "images": images}, ensure_ascii=False)
     except Exception as e:
@@ -288,6 +298,15 @@ async def edit_image(
                         ]
                     },
                 }
+            )
+            # Return a message indicating the image is already displayed
+            return json.dumps(
+                {
+                    "status": "success",
+                    "message": "The edited image has been successfully generated and is already visible to the user in the chat. You do not need to display or embed the image again - just acknowledge that it has been created.",
+                    "images": images,
+                },
+                ensure_ascii=False,
             )
 
         return json.dumps({"status": "success", "images": images}, ensure_ascii=False)
