@@ -44,7 +44,7 @@ from open_webui.env import (
     AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
 )
 from open_webui.tools.builtin import (
-    web_search,
+    search_web,
     fetch_url,
     generate_image,
     edit_image,
@@ -365,9 +365,6 @@ def get_builtin_tools(
     # Time utilities - always available for date calculations
     builtin_functions.extend([get_current_timestamp, calculate_timestamp])
 
-    # Chats tools - search and fetch user's chat history
-    builtin_functions.extend([search_chats, view_chat])
-
     # Knowledge base tools - conditional injection based on model knowledge
     # If model has attached knowledge (any type), only provide query_knowledge_bases
     # Otherwise, provide all KB browsing tools
@@ -381,6 +378,9 @@ def get_builtin_tools(
             [list_knowledge_bases, search_knowledge_bases, search_knowledge_files, view_knowledge_file, query_knowledge_bases]
         )
 
+    # Chats tools - search and fetch user's chat history
+    builtin_functions.extend([search_chats, view_chat])
+
     # Add memory tools if enabled for this chat
     if features.get("memory"):
         builtin_functions.extend([search_memories, add_memory, replace_memory_content])
@@ -389,7 +389,7 @@ def get_builtin_tools(
     if getattr(request.app.state.config, "ENABLE_WEB_SEARCH", False) and get_model_capability(
         "web_search"
     ):
-        builtin_functions.extend([web_search, fetch_url])
+        builtin_functions.extend([search_web, fetch_url])
 
     # Add image generation/edit tools if enabled globally AND model has image_generation capability
     if getattr(
