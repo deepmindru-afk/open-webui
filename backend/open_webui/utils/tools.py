@@ -37,7 +37,10 @@ from langchain_core.utils.function_calling import (
 from open_webui.utils.misc import is_string_allowed
 from open_webui.models.tools import Tools
 from open_webui.models.users import UserModel
+from open_webui.models.groups import Groups
 from open_webui.utils.plugin import load_tool_module_by_id
+from open_webui.utils.access_control import has_access
+from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
 from open_webui.env import (
     AIOHTTP_CLIENT_TIMEOUT,
     AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA,
@@ -130,15 +133,114 @@ def get_updated_tool_function(function: Callable, extra_params: dict):
     return function
 
 
+def has_tool_server_access(
+    user: UserModel, server_connection: dict, user_group_ids: set = None
+) -> bool:
+    """Check if user has access to a tool server (MCP or OpenAPI)."""
+    if user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL:
+        return True
+
+    if user_group_ids is None:
+        user_group_ids = {group.id for group in Groups.get_groups_by_member_id(user.id)}
+
+    access_control = server_connection.get("config", {}).get("access_control", None)
+    return has_access(user.id, "read", access_control, user_group_ids)
+
+
 async def get_tools(
     request: Request, tool_ids: list[str], user: UserModel, extra_params: dict
 ) -> dict[str, dict]:
+    """Load tools for the given tool_ids, checking access control."""
     tools_dict = {}
+
+    # Get user's group memberships for access control checks
+    user_group_ids = {group.id for group in Groups.get_groups_by_member_id(user.id)}
 
     for tool_id in tool_ids:
         tool = Tools.get_tool_by_id(tool_id)
-        if tool is None:
+        if tool:
+            # Check access control for local tools
+            if (
+                not (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
+                and tool.user_id != user.id
+                and not has_access(user.id, "read", tool.access_control, user_group_ids)
+            ):
+                log.warning(f"Access denied to tool {tool_id} for user {user.id}")
+                continue
 
+            module = request.app.state.TOOLS.get(tool_id, None)
+            if module is None:
+                module, _ = load_tool_module_by_id(tool_id)
+                request.app.state.TOOLS[tool_id] = module
+
+            __user__ = {
+                **extra_params["__user__"],
+            }
+
+            # Set valves for the tool
+            if hasattr(module, "valves") and hasattr(module, "Valves"):
+                valves = Tools.get_tool_valves_by_id(tool_id) or {}
+                module.valves = module.Valves(**valves)
+            if hasattr(module, "UserValves"):
+                __user__["valves"] = module.UserValves(  # type: ignore
+                    **Tools.get_user_valves_by_id_and_user_id(tool_id, user.id)
+                )
+
+            for spec in tool.specs:
+                # TODO: Fix hack for OpenAI API
+                # Some times breaks OpenAI but others don't. Leaving the comment
+                for val in spec.get("parameters", {}).get("properties", {}).values():
+                    if val.get("type") == "str":
+                        val["type"] = "string"
+
+                # Remove internal reserved parameters (e.g. __id__, __user__)
+                spec["parameters"]["properties"] = {
+                    key: val
+                    for key, val in spec["parameters"]["properties"].items()
+                    if not key.startswith("__")
+                }
+
+                # convert to function that takes only model params and inserts custom params
+                function_name = spec["name"]
+                tool_function = getattr(module, function_name)
+                callable = get_async_tool_function_and_apply_extra_params(
+                    tool_function,
+                    {
+                        **extra_params,
+                        "__id__": tool_id,
+                        "__user__": __user__,
+                    },
+                )
+
+                # TODO: Support Pydantic models as parameters
+                if callable.__doc__ and callable.__doc__.strip() != "":
+                    s = re.split(":(param|return)", callable.__doc__, 1)
+                    spec["description"] = s[0]
+                else:
+                    spec["description"] = function_name
+
+                tool_dict = {
+                    "tool_id": tool_id,
+                    "callable": callable,
+                    "spec": spec,
+                    # Misc info
+                    "metadata": {
+                        "file_handler": hasattr(module, "file_handler")
+                        and module.file_handler,
+                        "citation": hasattr(module, "citation") and module.citation,
+                    },
+                }
+
+                # Handle function name collisions
+                while function_name in tools_dict:
+                    log.warning(
+                        f"Tool {function_name} already exists in another tools!"
+                    )
+                    # Prepend tool ID to function name
+                    function_name = f"{tool_id}_{function_name}"
+
+                tools_dict[function_name] = tool_dict
+        else:
             if tool_id.startswith("server:"):
                 splits = tool_id.split(":")
 
@@ -172,6 +274,15 @@ async def get_tools(
                             tool_server_idx
                         ]
                     )
+
+                    # Check access control for tool server
+                    if not has_tool_server_access(
+                        user, tool_server_connection, user_group_ids
+                    ):
+                        log.warning(
+                            f"Access denied to tool server {server_id} for user {user.id}"
+                        )
+                        continue
 
                     specs = tool_server_data.get("specs", [])
                     function_name_filter_list = tool_server_connection.get(
@@ -267,82 +378,6 @@ async def get_tools(
                 else:
                     continue
 
-            else:
-                continue
-        else:
-            module = request.app.state.TOOLS.get(tool_id, None)
-            if module is None:
-                module, _ = load_tool_module_by_id(tool_id)
-                request.app.state.TOOLS[tool_id] = module
-
-            __user__ = {
-                **extra_params["__user__"],
-            }
-
-            # Set valves for the tool
-            if hasattr(module, "valves") and hasattr(module, "Valves"):
-                valves = Tools.get_tool_valves_by_id(tool_id) or {}
-                module.valves = module.Valves(**valves)
-            if hasattr(module, "UserValves"):
-                __user__["valves"] = module.UserValves(  # type: ignore
-                    **Tools.get_user_valves_by_id_and_user_id(tool_id, user.id)
-                )
-
-            for spec in tool.specs:
-                # TODO: Fix hack for OpenAI API
-                # Some times breaks OpenAI but others don't. Leaving the comment
-                for val in spec.get("parameters", {}).get("properties", {}).values():
-                    if val.get("type") == "str":
-                        val["type"] = "string"
-
-                # Remove internal reserved parameters (e.g. __id__, __user__)
-                spec["parameters"]["properties"] = {
-                    key: val
-                    for key, val in spec["parameters"]["properties"].items()
-                    if not key.startswith("__")
-                }
-
-                # convert to function that takes only model params and inserts custom params
-                function_name = spec["name"]
-                tool_function = getattr(module, function_name)
-                callable = get_async_tool_function_and_apply_extra_params(
-                    tool_function,
-                    {
-                        **extra_params,
-                        "__id__": tool_id,
-                        "__user__": __user__,
-                    },
-                )
-
-                # TODO: Support Pydantic models as parameters
-                if callable.__doc__ and callable.__doc__.strip() != "":
-                    s = re.split(":(param|return)", callable.__doc__, 1)
-                    spec["description"] = s[0]
-                else:
-                    spec["description"] = function_name
-
-                tool_dict = {
-                    "tool_id": tool_id,
-                    "callable": callable,
-                    "spec": spec,
-                    # Misc info
-                    "metadata": {
-                        "file_handler": hasattr(module, "file_handler")
-                        and module.file_handler,
-                        "citation": hasattr(module, "citation") and module.citation,
-                    },
-                }
-
-                # Handle function name collisions
-                while function_name in tools_dict:
-                    log.warning(
-                        f"Tool {function_name} already exists in another tools!"
-                    )
-                    # Prepend tool ID to function name
-                    function_name = f"{tool_id}_{function_name}"
-
-                tools_dict[function_name] = tool_dict
-
     return tools_dict
 
 
@@ -360,7 +395,12 @@ def get_builtin_tools(
 
     # Helper to get model capabilities (defaults to True if not specified)
     def get_model_capability(name: str, default: bool = True) -> bool:
-        return model.get("info", {}).get("meta", {}).get("capabilities", {}).get(name, default)
+        return (
+            model.get("info", {})
+            .get("meta", {})
+            .get("capabilities", {})
+            .get(name, default)
+        )
 
     # Time utilities - always available for date calculations
     builtin_functions.extend([get_current_timestamp, calculate_timestamp])
@@ -375,7 +415,13 @@ def get_builtin_tools(
     else:
         # No model knowledge - allow full KB browsing
         builtin_functions.extend(
-            [list_knowledge_bases, search_knowledge_bases, search_knowledge_files, view_knowledge_file, query_knowledge_bases]
+            [
+                list_knowledge_bases,
+                search_knowledge_bases,
+                search_knowledge_files,
+                view_knowledge_file,
+                query_knowledge_bases,
+            ]
         )
 
     # Chats tools - search and fetch user's chat history
@@ -386,9 +432,9 @@ def get_builtin_tools(
         builtin_functions.extend([search_memories, add_memory, replace_memory_content])
 
     # Add web search tools if enabled globally AND model has web_search capability
-    if getattr(request.app.state.config, "ENABLE_WEB_SEARCH", False) and get_model_capability(
-        "web_search"
-    ):
+    if getattr(
+        request.app.state.config, "ENABLE_WEB_SEARCH", False
+    ) and get_model_capability("web_search"):
         builtin_functions.extend([search_web, fetch_url])
 
     # Add image generation/edit tools if enabled globally AND model has image_generation capability
@@ -396,9 +442,9 @@ def get_builtin_tools(
         request.app.state.config, "ENABLE_IMAGE_GENERATION", False
     ) and get_model_capability("image_generation"):
         builtin_functions.append(generate_image)
-    if getattr(request.app.state.config, "ENABLE_IMAGE_EDIT", False) and get_model_capability(
-        "image_generation"
-    ):
+    if getattr(
+        request.app.state.config, "ENABLE_IMAGE_EDIT", False
+    ) and get_model_capability("image_generation"):
         builtin_functions.append(edit_image)
 
     # Notes tools - search, view, create, and update user's notes (if notes enabled globally)
