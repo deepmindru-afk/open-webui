@@ -1436,6 +1436,14 @@ class OAuthManager:
                 or (auth_manager_config.OAUTH_USERNAME_CLAIM not in user_data)
             ):
                 user_data: UserInfo = await client.userinfo(token=token)
+
+                # Merge ID token claims into user_data to preserve claims like 'roles' and 'groups'
+                # that may only exist in the ID token (common with Microsoft Entra ID, etc.)
+                if token.get("userinfo") and user_data:
+                    for key, value in token.get("userinfo").items():
+                        if key not in user_data:
+                            user_data[key] = value
+
             if (
                 provider == "feishu"
                 and isinstance(user_data, dict)
