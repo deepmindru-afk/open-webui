@@ -415,12 +415,6 @@
 					{/if}
 				</div>
 
-<<<<<<< HEAD
-				<div class="text-xs text-gray-400 dark:text-gray-500 underline">
-					<a href="https://www.portalos.ru" target="_blank">
-						{$i18n.t('To learn more about powerful prompt variables, click here')}
-					</a>
-=======
 				<div class="mt-1.5">
 					<Tooltip content={$i18n.t('Click to copy ID')}>
 						<button
@@ -433,7 +427,6 @@
 							{prompt.id}
 						</button>
 					</Tooltip>
->>>>>>> upstream/dev
 				</div>
 			</div>
 		</div>
