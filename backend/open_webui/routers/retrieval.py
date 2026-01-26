@@ -1773,7 +1773,7 @@ def process_file(
                 try:
                     # Release the database connection relative to the 'file' object
                     # to prevent holding the connection during the slow embedding step.
-                    db.expunge(file)
+                    #db.expunge(file)
                     db.commit()
 
                     # External embedding API takes time (5-60s+).
