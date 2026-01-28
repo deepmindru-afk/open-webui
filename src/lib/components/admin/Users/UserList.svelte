@@ -2,7 +2,7 @@
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { WEBUI_NAME, config, user, showSidebar } from '$lib/stores';
 	import { goto } from '$app/navigation';
-	import { onMount, getContext, onDestroy } from 'svelte';
+	import { onMount, getContext } from 'svelte';
 
 	import dayjs from 'dayjs';
 	import relativeTime from 'dayjs/plugin/relativeTime';
@@ -43,7 +43,6 @@
 	let total = null;
 
 	let query = '';
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let orderBy = 'created_at'; // default sort key
 	let direction = 'asc'; // default sort order
 
@@ -98,21 +97,13 @@
 		}
 	};
 
-	$: if (query !== undefined) {
-		clearTimeout(searchDebounceTimer);
-		searchDebounceTimer = setTimeout(() => {
-			page = 1;
-			getUserList();
-		}, 300);
+	$: if (query) {
+		page = 1;
 	}
 
-	$: if (page !== null && orderBy !== null && direction !== null) {
+	$: if (query !== null && page !== null && orderBy !== null && direction !== null) {
 		getUserList();
 	}
-
-	onDestroy(() => {
-		clearTimeout(searchDebounceTimer);
-	});
 </script>
 
 <ConfirmDialog
