@@ -45,7 +45,10 @@ from open_webui.env import (
     AIOHTTP_CLIENT_TIMEOUT,
     AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA,
     AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
+    ENABLE_FORWARD_USER_INFO_HEADERS,
+    FORWARD_SESSION_INFO_HEADER_CHAT_ID,
 )
+from open_webui.utils.headers import include_user_info_headers
 from open_webui.tools.builtin import (
     search_web,
     fetch_url,
@@ -334,6 +337,13 @@ async def get_tools(
                         if connection_headers and isinstance(connection_headers, dict):
                             for key, value in connection_headers.items():
                                 headers[key] = value
+
+                        # Add user info headers if enabled
+                        if ENABLE_FORWARD_USER_INFO_HEADERS and user:
+                            headers = include_user_info_headers(headers, user)
+                            metadata = extra_params.get("__metadata__", {})
+                            if metadata and metadata.get("chat_id"):
+                                headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = metadata.get("chat_id")
 
                         def make_tool_function(
                             function_name, tool_server_data, headers
@@ -697,9 +707,10 @@ def convert_openapi_to_tool_payload(openapi_spec):
                     "parameters": {"type": "object", "properties": {}, "required": []},
                 }
 
-                # Extract path and query parameters
                 for param in operation.get("parameters", []):
-                    param_name = param["name"]
+                    param_name = param.get("name")
+                    if not param_name:
+                        continue
                     param_schema = param.get("schema", {})
                     description = param_schema.get("description", "")
                     if not description:
@@ -971,8 +982,10 @@ async def execute_tool_server(
         body_params = {}
 
         for param in operation.get("parameters", []):
-            param_name = param["name"]
-            param_in = param["in"]
+            param_name = param.get("name")
+            if not param_name:
+                continue
+            param_in = param.get("in")
             if param_name in params:
                 if param_in == "path":
                     path_params[param_name] = params[param_name]
