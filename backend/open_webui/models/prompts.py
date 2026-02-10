@@ -504,7 +504,7 @@ class PromptsTable:
         tags: Optional[list[str]] = None,
         db: Optional[Session] = None,
     ) -> Optional[PromptModel]:
-        """Update only name and command (no history created)."""
+        """Update only name, command, and tags (no history created)."""
         try:
             with get_db_context(db) as db:
                 prompt = db.query(Prompt).filter_by(id=prompt_id).first()
