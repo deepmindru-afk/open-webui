@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 import aiohttp
 from aiocache import cached
@@ -520,9 +521,11 @@ async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
                 for model in model_list:
                     model_id = model.get("id") or model.get("name")
 
-                    if "api.openai.com" in api_base_urls[
-                        idx
-                    ] and not is_supported_openai_models(model_id):
+                    base_url = api_base_urls[idx]
+                    hostname = urlparse(base_url).hostname if base_url else None
+                    if hostname == "api.openai.com" and not is_supported_openai_models(
+                        model_id
+                    ):
                         # Skip unwanted OpenAI models
                         continue
 
@@ -979,7 +982,7 @@ async def generate_chat_completion(
 
     # Check if model is already in app state cache to avoid expensive get_all_models() call
     models = request.app.state.OPENAI_MODELS
-    if not models or model not in models:
+    if not models or model_id not in models:
         await get_all_models(request, user=user)
         models = request.app.state.OPENAI_MODELS
     model = models.get(model_id)
