@@ -129,6 +129,7 @@ from open_webui.env import (
     RAG_SYSTEM_CONTEXT,
     ENABLE_FORWARD_USER_INFO_HEADERS,
     FORWARD_SESSION_INFO_HEADER_CHAT_ID,
+    FORWARD_SESSION_INFO_HEADER_MESSAGE_ID,
 )
 from open_webui.utils.headers import include_user_info_headers
 from open_webui.constants import TASKS
@@ -170,9 +171,13 @@ def get_citation_source_from_tool_result(
     Returns a list of sources (usually one, but query_knowledge_files may return multiple).
     """
     try:
+        tool_result = json.loads(tool_result)
+        if isinstance(tool_result, dict) and "error" in tool_result:
+            return []
+
         if tool_name == "search_web":
             # Parse JSON array: [{"title": "...", "link": "...", "snippet": "..."}]
-            results = json.loads(tool_result)
+            results = tool_result
             documents = []
             metadata = []
 
@@ -199,7 +204,7 @@ def get_citation_source_from_tool_result(
             ]
 
         elif tool_name == "view_knowledge_file":
-            file_data = json.loads(tool_result)
+            file_data = tool_result
             filename = file_data.get("filename", "Unknown File")
             file_id = file_data.get("id", "")
             knowledge_name = file_data.get("knowledge_name", "")
@@ -228,7 +233,7 @@ def get_citation_source_from_tool_result(
             ]
 
         elif tool_name == "query_knowledge_files":
-            chunks = json.loads(tool_result)
+            chunks = tool_result
 
             # Group chunks by source for better citation display
             # Each unique source becomes a separate source entry
@@ -1254,6 +1259,7 @@ async def chat_web_search_handler(
                 "messages": messages,
                 "prompt": user_message,
                 "type": "web_search",
+                "chat_id": extra_params.get("__chat_id__"),
             },
             user,
         )
@@ -1584,6 +1590,7 @@ async def chat_image_generation_handler(
                     {
                         "model": form_data["model"],
                         "messages": form_data["messages"],
+                        "chat_id": metadata.get("chat_id"),
                     },
                     user,
                 )
@@ -1690,6 +1697,7 @@ async def chat_completion_files_handler(
                         "model": body["model"],
                         "messages": body["messages"],
                         "type": "retrieval",
+                        "chat_id": body.get("metadata", {}).get("chat_id"),
                     },
                     user,
                 )
@@ -2246,6 +2254,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if metadata and metadata.get("chat_id"):
                             headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = metadata.get(
                                 "chat_id"
+                            )
+                        if metadata and metadata.get("message_id"):
+                            headers[FORWARD_SESSION_INFO_HEADER_MESSAGE_ID] = (
+                                metadata.get("message_id")
                             )
 
                     mcp_clients[server_id] = MCPClient()

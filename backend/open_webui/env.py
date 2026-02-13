@@ -209,6 +209,9 @@ FORWARD_USER_INFO_HEADER_USER_ROLE = os.environ.get(
 )
 
 # Header name for chat ID forwarding (customizable via environment variable)
+FORWARD_SESSION_INFO_HEADER_MESSAGE_ID = os.environ.get(
+    "FORWARD_SESSION_INFO_HEADER_MESSAGE_ID", "X-OpenWebUI-Message-Id"
+)
 FORWARD_SESSION_INFO_HEADER_CHAT_ID = os.environ.get(
     "FORWARD_SESSION_INFO_HEADER_CHAT_ID", "X-OpenWebUI-Chat-Id"
 )
@@ -778,6 +781,17 @@ else:
 AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL = (
     os.environ.get("AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL", "True").lower() == "true"
 )
+
+
+RAG_EMBEDDING_TIMEOUT = os.environ.get("RAG_EMBEDDING_TIMEOUT", "")
+
+if RAG_EMBEDDING_TIMEOUT == "":
+    RAG_EMBEDDING_TIMEOUT = None
+else:
+    try:
+        RAG_EMBEDDING_TIMEOUT = int(RAG_EMBEDDING_TIMEOUT)
+    except Exception:
+        RAG_EMBEDDING_TIMEOUT = None
 
 
 ####################################
