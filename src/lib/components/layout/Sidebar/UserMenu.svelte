@@ -286,7 +286,7 @@
 				{#if $user?.role === 'admin'}
 					<DropdownMenu.Item
 						as="a"
-						href="https://docs.openwebui.com"
+						href="https://www.portalos.ru"
 						target="_blank"
 						draggable="false"
 						class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
@@ -294,10 +294,6 @@
 						on:click={() => {
 							show = false;
 						}}
-<<<<<<< HEAD
-						href="https://www.portalos.ru"
-=======
->>>>>>> upstream/dev
 					>
 						<div class=" self-center mr-3">
 							<QuestionMarkCircle className="size-5" />
@@ -308,7 +304,7 @@
 					<!-- Releases -->
 					<DropdownMenu.Item
 						as="a"
-						href="https://github.com/open-webui/open-webui/releases"
+						href="https://www.portalos.ru"
 						target="_blank"
 						draggable="false"
 						class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
@@ -316,10 +312,6 @@
 						on:click={() => {
 							show = false;
 						}}
-<<<<<<< HEAD
-						href="https://www.portalos.ru"
-=======
->>>>>>> upstream/dev
 					>
 						<div class=" self-center mr-3">
 							<Map className="size-5" />
