@@ -974,6 +974,37 @@ class ChatTable:
         except Exception:
             return None
 
+    def is_chat_owner(
+        self, id: str, user_id: str, db: Optional[Session] = None
+    ) -> bool:
+        """
+        Lightweight ownership check — uses EXISTS subquery instead of loading
+        the full Chat row (which includes the potentially large JSON blob).
+        """
+        try:
+            with get_db_context(db) as db:
+                return db.query(
+                    exists().where(and_(Chat.id == id, Chat.user_id == user_id))
+                ).scalar()
+        except Exception:
+            return False
+
+    def get_chat_folder_id(
+        self, id: str, user_id: str, db: Optional[Session] = None
+    ) -> Optional[str]:
+        """
+        Fetch only the folder_id column for a chat, without loading the full
+        JSON blob. Returns None if chat doesn't exist or doesn't belong to user.
+        """
+        try:
+            with get_db_context(db) as db:
+                result = (
+                    db.query(Chat.folder_id).filter_by(id=id, user_id=user_id).first()
+                )
+                return result[0] if result else None
+        except Exception:
+            return None
+
     def get_chats(
         self, skip: int = 0, limit: int = 50, db: Optional[Session] = None
     ) -> list[ChatModel]:
@@ -1039,9 +1070,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id, pinned=True, archived=False)
                 .order_by(Chat.updated_at.desc())
-                .with_entities(
-                    Chat.id, Chat.title, Chat.updated_at, Chat.created_at
-                )
+                .with_entities(Chat.id, Chat.title, Chat.updated_at, Chat.created_at)
             )
             return [
                 ChatTitleIdResponse.model_validate(
@@ -1179,29 +1208,23 @@ class ChatTable:
 
                 # Check if there are any tags to filter, it should have all the tags
                 if "none" in tag_ids:
-                    query = query.filter(
-                        text(
-                            """
+                    query = query.filter(text("""
                             NOT EXISTS (
                                 SELECT 1
                                 FROM json_each(Chat.meta, '$.tags') AS tag
                             )
-                            """
-                        )
-                    )
+                            """))
                 elif tag_ids:
                     query = query.filter(
                         and_(
                             *[
-                                text(
-                                    f"""
+                                text(f"""
                                     EXISTS (
                                         SELECT 1
                                         FROM json_each(Chat.meta, '$.tags') AS tag
                                         WHERE tag.value = :tag_id_{tag_idx}
                                     )
-                                    """
-                                ).params(**{f"tag_id_{tag_idx}": tag_id})
+                                    """).params(**{f"tag_id_{tag_idx}": tag_id})
                                 for tag_idx, tag_id in enumerate(tag_ids)
                             ]
                         )
@@ -1237,29 +1260,23 @@ class ChatTable:
 
                 # Check if there are any tags to filter, it should have all the tags
                 if "none" in tag_ids:
-                    query = query.filter(
-                        text(
-                            """
+                    query = query.filter(text("""
                             NOT EXISTS (
                                 SELECT 1
                                 FROM json_array_elements_text(Chat.meta->'tags') AS tag
                             )
-                            """
-                        )
-                    )
+                            """))
                 elif tag_ids:
                     query = query.filter(
                         and_(
                             *[
-                                text(
-                                    f"""
+                                text(f"""
                                     EXISTS (
                                         SELECT 1
                                         FROM json_array_elements_text(Chat.meta->'tags') AS tag
                                         WHERE tag = :tag_id_{tag_idx}
                                     )
-                                    """
-                                ).params(**{f"tag_id_{tag_idx}": tag_id})
+                                    """).params(**{f"tag_id_{tag_idx}": tag_id})
                                 for tag_idx, tag_id in enumerate(tag_ids)
                             ]
                         )

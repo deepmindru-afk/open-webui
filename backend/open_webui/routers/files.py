@@ -400,7 +400,9 @@ async def search_files(
     Uses SQL-based filtering with pagination for better performance.
     """
     # Determine user_id: null for admin with bypass (search all), user.id otherwise
-    user_id = None if (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL) else user.id
+    user_id = (
+        None if (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL) else user.id
+    )
 
     # Use optimized database query with pagination
     files = Files.search_files(
@@ -690,6 +692,8 @@ async def get_file_content_by_id(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=ERROR_MESSAGES.NOT_FOUND,
                 )
+        except HTTPException as e:
+            raise e
         except Exception as e:
             log.exception(e)
             log.error("Error getting file content")
@@ -741,6 +745,8 @@ async def get_html_file_content_by_id(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=ERROR_MESSAGES.NOT_FOUND,
                 )
+        except HTTPException as e:
+            raise e
         except Exception as e:
             log.exception(e)
             log.error("Error getting file content")

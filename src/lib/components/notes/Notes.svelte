@@ -30,8 +30,14 @@
 	$: loadLocale($i18n.languages);
 
 	import { goto } from '$app/navigation';
-	import { WEBUI_NAME, config, prompts as _prompts, user } from '$lib/stores';
-	import { createNewNote, deleteNoteById, getNoteById, getNoteList, searchNotes } from '$lib/apis/notes';
+	import { WEBUI_NAME, config, user } from '$lib/stores';
+	import {
+		createNewNote,
+		deleteNoteById,
+		getNoteById,
+		getNoteList,
+		searchNotes
+	} from '$lib/apis/notes';
 	import { capitalizeFirstLetter, copyToClipboard, getTimeRange } from '$lib/utils';
 	import { downloadPdf, createNoteHandler } from './utils';
 
