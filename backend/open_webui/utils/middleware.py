@@ -827,10 +827,15 @@ def apply_source_context_to_messages(
     messages: list,
     sources: list,
     user_message: str,
+    include_content: bool = True,
 ) -> list:
     """
     Build source context from citation sources and apply to messages.
     Uses RAG template to format context for model consumption.
+
+    When include_content is False, emit <source> tags with id/name but no
+    document body — useful when the content is already present elsewhere
+    (e.g. in a tool result message) and only citation markers are needed.
     """
     if not sources or not user_message:
         return messages
@@ -844,10 +849,11 @@ def apply_source_context_to_messages(
             if src_id not in citation_idx:
                 citation_idx[src_id] = len(citation_idx) + 1
             src_name = source.get("source", {}).get("name")
+            body = doc if include_content else ""
             context_string += (
                 f'<source id="{citation_idx[src_id]}"'
                 + (f' name="{src_name}"' if src_name else "")
-                + f">{doc}</source>\n"
+                + f">{body}</source>\n"
             )
 
     context_string = context_string.strip()
@@ -2324,7 +2330,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         ) in request.app.state.config.TOOL_SERVER_CONNECTIONS:
                             if (
                                 server_connection.get("type", "") == "mcp"
-                                and server_connection.get("info", {}).get("id") == server_id
+                                and server_connection.get("info", {}).get("id")
+                                == server_id
                             ):
                                 mcp_server_connection = server_connection
                                 break
@@ -2385,8 +2392,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if ENABLE_FORWARD_USER_INFO_HEADERS and user:
                             headers = include_user_info_headers(headers, user)
                             if metadata and metadata.get("chat_id"):
-                                headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = metadata.get(
-                                    "chat_id"
+                                headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = (
+                                    metadata.get("chat_id")
                                 )
                             if metadata and metadata.get("message_id"):
                                 headers[FORWARD_SESSION_INFO_HEADER_MESSAGE_ID] = (
@@ -2404,7 +2411,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         ).get("function_name_filter_list", "")
 
                         if isinstance(function_name_filter_list, str):
-                            function_name_filter_list = function_name_filter_list.split(",")
+                            function_name_filter_list = function_name_filter_list.split(
+                                ","
+                            )
 
                         tool_specs = await mcp_clients[server_id].list_tool_specs()
                         for tool_spec in tool_specs:
@@ -4227,6 +4236,8 @@ async def streaming_chat_response_handler(response, ctx):
                         await event_emitter({"type": "source", "data": source})
 
                     # Apply source context to messages for model
+                    # Use metadata_only=True to avoid duplicating content
+                    # that is already in the tool result message.
                     all_tool_call_sources.extend(tool_call_sources)
                     if all_tool_call_sources and user_message:
                         # Restore original user message before re-applying to avoid recursive nesting
@@ -4238,6 +4249,7 @@ async def streaming_chat_response_handler(response, ctx):
                             form_data["messages"],
                             all_tool_call_sources,
                             user_message,
+                            include_content=False,
                         )
                     tool_call_sources.clear()
 
