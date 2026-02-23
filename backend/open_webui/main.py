@@ -394,6 +394,8 @@ from open_webui.config import (
     DEFAULT_PINNED_MODELS,
     DEFAULT_ARENA_MODEL,
     MODEL_ORDER_LIST,
+    DEFAULT_MODEL_METADATA,
+    DEFAULT_MODEL_PARAMS,
     EVALUATION_ARENA_MODELS,
     # WebUI (OAuth)
     ENABLE_OAUTH_ROLE_MANAGEMENT,
@@ -501,6 +503,7 @@ from open_webui.env import (
     WEBUI_ADMIN_PASSWORD,
     WEBUI_ADMIN_NAME,
     ENABLE_EASTER_EGGS,
+    LOG_FORMAT,
 )
 
 
@@ -579,7 +582,8 @@ class SPAStaticFiles(StaticFiles):
                 raise ex
 
 
-print(rf"""
+if LOG_FORMAT != "json":
+    print(rf"""
  ██████╗ ██████╗ ███████╗███╗   ██╗    ██╗    ██╗███████╗██████╗ ██╗   ██╗██╗
 ██╔═══██╗██╔══██╗██╔════╝████╗  ██║    ██║    ██║██╔════╝██╔══██╗██║   ██║██║
 ██║   ██║██████╔╝█████╗  ██╔██╗ ██║    ██║ █╗ ██║█████╗  ██████╔╝██║   ██║██║
@@ -822,6 +826,8 @@ app.state.config.ADMIN_EMAIL = ADMIN_EMAIL
 app.state.config.DEFAULT_MODELS = DEFAULT_MODELS
 app.state.config.DEFAULT_PINNED_MODELS = DEFAULT_PINNED_MODELS
 app.state.config.MODEL_ORDER_LIST = MODEL_ORDER_LIST
+app.state.config.DEFAULT_MODEL_METADATA = DEFAULT_MODEL_METADATA
+app.state.config.DEFAULT_MODEL_PARAMS = DEFAULT_MODEL_PARAMS
 
 
 app.state.config.DEFAULT_PROMPT_SUGGESTIONS = DEFAULT_PROMPT_SUGGESTIONS
@@ -1688,9 +1694,14 @@ async def chat_completion(
             request.state.direct = True
             request.state.model = model
 
-        model_info_params = (
-            model_info.params.model_dump() if model_info and model_info.params else {}
+        # Model params: global defaults as base, per-model overrides win
+        default_model_params = (
+            getattr(request.app.state.config, "DEFAULT_MODEL_PARAMS", None) or {}
         )
+        model_info_params = {
+            **default_model_params,
+            **(model_info.params.model_dump() if model_info and model_info.params else {}),
+        }
 
         # Check base model existence for custom models
         if model_info_params.get("base_model_id"):
@@ -1705,8 +1716,10 @@ async def chat_completion(
                         default_models[0].strip() if default_models[0] else None
                     )
 
-                    if fallback_model_id:
-                        request.base_model_id = fallback_model_id
+                    if fallback_model_id and fallback_model_id in request.app.state.MODELS:
+                        # Update model and form_data so routing uses the fallback model's type
+                        model = request.app.state.MODELS[fallback_model_id]
+                        form_data["model"] = fallback_model_id
                     else:
                         raise Exception("Model not found")
                 else:
