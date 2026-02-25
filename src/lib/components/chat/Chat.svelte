@@ -33,18 +33,19 @@
 		currentChatPage,
 		temporaryChatEnabled,
 		mobile,
-		showOverview,
 		chatTitle,
 		showArtifacts,
 		artifactContents,
 		tools,
 		toolServers,
+		terminalServers,
 		functions,
 		selectedFolder,
 		pinnedChats,
 		showEmbeds
 	} from '$lib/stores';
 
+	import { getCwd } from '$lib/apis/terminal';
 	import {
 		convertMessagesToHistory,
 		copyToClipboard,
@@ -139,6 +140,26 @@
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
+
+	// Auto-inject terminal servers into selected tool IDs so they act like toggled-on tools
+	$: if ($terminalServers && $terminalServers.length > 0) {
+		const terminalIds = $terminalServers.map((_, i) => `direct_server:terminal_${i}`);
+		const missingIds = terminalIds.filter((id) => !selectedToolIds.includes(id));
+		if (missingIds.length > 0) {
+			selectedToolIds = [...selectedToolIds, ...missingIds];
+		}
+	}
+
+	// Remove disabled terminal servers from selectedToolIds automatically
+	$: if (selectedToolIds.length > 0) {
+		const terminalIds = ($terminalServers ?? []).map((_, i) => `direct_server:terminal_${i}`);
+		const invalidTerminalIds = selectedToolIds.filter(
+			(id) => id.startsWith('direct_server:terminal_') && !terminalIds.includes(id)
+		);
+		if (invalidTerminalIds.length > 0) {
+			selectedToolIds = selectedToolIds.filter((id) => !invalidTerminalIds.includes(id));
+		}
+	}
 
 	let showCommands = false;
 
@@ -319,6 +340,20 @@
 						[...(model?.info?.meta?.toolIds ?? [])].filter((id) => $tools.find((t) => t.id === id))
 					)
 				];
+			} else if (
+				$settings?.tools &&
+				$settings.tools.some((id) => !id.startsWith('direct_server:terminal_'))
+			) {
+				selectedToolIds = $settings.tools;
+			} else {
+				// Don't wipe existing terminal servers if no default tool IDs
+				selectedToolIds = selectedToolIds.filter((id) => !id.startsWith('direct_server:'));
+			}
+
+			// Auto-inject terminal servers
+			if ($terminalServers && $terminalServers.length > 0) {
+				const terminalIds = $terminalServers.map((_, i) => `direct_server:terminal_${i}`);
+				selectedToolIds = [...new Set([...selectedToolIds, ...terminalIds])];
 			}
 
 			// Set Default Filters (Toggleable only)
@@ -670,7 +705,6 @@
 
 			if (!value) {
 				showCallOverlay.set(false);
-				showOverview.set(false);
 				showArtifacts.set(false);
 				showEmbeds.set(false);
 			}
@@ -1053,9 +1087,10 @@
 			}
 		}
 
-		await showControls.set(false);
+		if ($mobile) {
+			await showControls.set(false);
+		}
 		await showCallOverlay.set(false);
-		await showOverview.set(false);
 		await showArtifacts.set(false);
 
 		if ($page.url.pathname.includes('/c/')) {
@@ -2091,6 +2126,22 @@
 			});
 		}
 
+		// Build terminal servers with current CWD injected into run_command descriptions
+		const terminalServersWithCwd = await (async () => {
+			const terminals = JSON.parse(JSON.stringify($terminalServers ?? []));
+			const configs = ($settings?.terminalServers ?? []).filter((s) => s.enabled);
+			await Promise.all(
+				configs.map(async (t) => {
+					const cwd = await getCwd(t.url, t.key ?? '').catch(() => null);
+					if (!cwd) return;
+					const server = terminals.find((s) => s.url === t.url);
+					const spec = server?.specs?.find((s) => s.name === 'run_command');
+					if (spec) spec.description += `\n\nThe current working directory is: ${cwd}`;
+				})
+			);
+			return terminals;
+		})();
+
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
 			{
@@ -2113,9 +2164,12 @@
 				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				tool_servers: ($toolServers ?? []).filter(
-					(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
-				),
+				tool_servers: [
+					...($toolServers ?? []).filter(
+						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
+					),
+					...terminalServersWithCwd
+				],
 				features: getFeatures(),
 				variables: {
 					...getPromptVariables(

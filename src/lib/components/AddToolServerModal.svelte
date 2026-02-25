@@ -58,6 +58,7 @@
 
 	let enable = true;
 	let loading = false;
+	let showAdvanced = false;
 
 	const registerOAuthClientHandler = async () => {
 		if (url === '') {
@@ -520,79 +521,101 @@
 							</div>
 						</div>
 
-						{#if ['', 'openapi'].includes(type)}
-							<div class="flex gap-2 mt-2">
-								<div class="flex flex-col w-full">
-									<div class="flex justify-between items-center mb-0.5">
-										<div class="flex gap-2 items-center">
-											<div
-												for="select-bearer-or-session"
-												class={`text-xs ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
-											>
-												{$i18n.t('OpenAPI Spec')}
+						<button
+							type="button"
+							class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition mt-2"
+							on:click={() => (showAdvanced = !showAdvanced)}
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 20 20"
+								fill="currentColor"
+								class="w-3 h-3 transition-transform {showAdvanced ? 'rotate-90' : ''}"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+									clip-rule="evenodd"
+								/>
+							</svg>
+							{$i18n.t('Advanced')}
+						</button>
+
+						{#if showAdvanced}
+							{#if ['', 'openapi'].includes(type)}
+								<div class="flex gap-2 mt-2">
+									<div class="flex flex-col w-full">
+										<div class="flex justify-between items-center mb-0.5">
+											<div class="flex gap-2 items-center">
+												<div
+													for="select-bearer-or-session"
+													class={`text-xs ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
+												>
+													{$i18n.t('OpenAPI Spec')}
+												</div>
 											</div>
 										</div>
-									</div>
 
-									<div class="flex gap-2">
-										<div class="flex-shrink-0 self-start">
-											<select
-												id="select-bearer-or-session"
-												class={`dark:bg-gray-900 w-full text-sm bg-transparent pr-5 ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700'}`}
-												bind:value={spec_type}
-											>
-												<option value="url">{$i18n.t('URL')}</option>
-												<option value="json">{$i18n.t('JSON')}</option>
-											</select>
-										</div>
-
-										<div class="flex flex-1 items-center">
-											{#if spec_type === 'url'}
-												<div class="flex-1 flex items-center">
-													<label for="url-or-path" class="sr-only"
-														>{$i18n.t('openapi.json URL or Path')}</label
-													>
-													<input
-														class={`w-full text-sm bg-transparent ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700'}`}
-														type="text"
-														id="url-or-path"
-														bind:value={path}
-														placeholder={$i18n.t('openapi.json URL or Path')}
-														autocomplete="off"
-														required
-													/>
-												</div>
-											{:else if spec_type === 'json'}
-												<div
-													class={`text-xs w-full self-center translate-y-[1px] ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
+										<div class="flex gap-2">
+											<div class="flex-shrink-0 self-start">
+												<select
+													id="select-bearer-or-session"
+													class={`dark:bg-gray-900 w-full text-sm bg-transparent pr-5 ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700'}`}
+													bind:value={spec_type}
 												>
-													<label for="url-or-path" class="sr-only">{$i18n.t('JSON Spec')}</label>
-													<textarea
-														class={`w-full text-sm bg-transparent ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700 text-black dark:text-white'}`}
-														bind:value={spec}
-														placeholder={$i18n.t('JSON Spec')}
-														autocomplete="off"
-														required
-														rows="5"
-													/>
-												</div>
-											{/if}
-										</div>
-									</div>
+													<option value="url">{$i18n.t('URL')}</option>
+													<option value="json">{$i18n.t('JSON')}</option>
+												</select>
+											</div>
 
-									{#if ['', 'url'].includes(spec_type)}
-										<div
-											class={`text-xs mt-1 ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
-										>
-											{$i18n.t(`WebUI will make requests to "{{url}}"`, {
-												url: path.includes('://')
-													? path
-													: `${url}${path.startsWith('/') ? '' : '/'}${path}`
-											})}
+											<div class="flex flex-1 items-center">
+												{#if spec_type === 'url'}
+													<div class="flex-1 flex items-center">
+														<label for="url-or-path" class="sr-only"
+															>{$i18n.t('openapi.json URL or Path')}</label
+														>
+														<input
+															class={`w-full text-sm bg-transparent ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700'}`}
+															type="text"
+															id="url-or-path"
+															bind:value={path}
+															placeholder={$i18n.t('openapi.json URL or Path')}
+															autocomplete="off"
+															required
+														/>
+													</div>
+												{:else if spec_type === 'json'}
+													<div
+														class={`text-xs w-full self-center translate-y-[1px] ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
+													>
+														<label for="url-or-path" class="sr-only">{$i18n.t('JSON Spec')}</label>
+														<textarea
+															class={`w-full text-sm bg-transparent ${($settings?.highContrastMode ?? false) ? 'placeholder:text-gray-700 dark:placeholder:text-gray-100' : 'outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700 text-black dark:text-white'}`}
+															bind:value={spec}
+															placeholder={$i18n.t('JSON Spec')}
+															autocomplete="off"
+															required
+															rows="5"
+														/>
+													</div>
+												{/if}
+											</div>
 										</div>
-									{/if}
+
+										{#if ['', 'url'].includes(spec_type)}
+											<div
+												class={`text-xs mt-1 ${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : 'text-gray-500'}`}
+											>
+												{$i18n.t(`WebUI will make requests to "{{url}}"`, {
+													url: path.includes('://')
+														? path
+														: `${url}${path.startsWith('/') ? '' : '/'}${path}`
+												})}
+											</div>
+										{/if}
+									</div>
 								</div>
-							</div>
+							{/if}
 						{/if}
 
 						<div class="flex gap-2 mt-2">
