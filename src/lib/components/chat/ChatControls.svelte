@@ -141,10 +141,13 @@
 		dragged = false;
 	};
 
-	onMount(() => {
+	onMount(async () => {
 		mediaQuery = window.matchMedia('(min-width: 1024px)');
 		mediaQuery.addEventListener('change', handleMediaQuery);
 		handleMediaQuery(mediaQuery);
+
+		// Wait for Svelte to render the Pane after largeScreen changed
+		await tick();
 
 		const container = document.getElementById('chat-container');
 		minSize = Math.floor((350 / container.clientWidth) * 100);
@@ -170,15 +173,12 @@
 		document.addEventListener('mousedown', onMouseDown);
 		document.addEventListener('mouseup', onMouseUp);
 
-		// Delay enabling onCollapse so the Pane's initial collapsed state
-		// (defaultSize=0) doesn't reset showControls
-		setTimeout(() => {
-			paneReady = true;
-			// If controls were persisted as open, expand the pane now that it's ready
-			if ($showControls && pane) {
-				openPane();
-			}
-		}, 0);
+		setTimeout(() => { paneReady = true; }, 0);
+
+		// If controls were persisted as open, set the pane to the saved size
+		if ($showControls && pane) {
+			openPane();
+		}
 	});
 
 	onDestroy(() => {
@@ -200,7 +200,7 @@
 		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
-	$: if (!chatId) closeHandler();
+	$: if (paneReady && !chatId) closeHandler();
 
 	// Helper: is a "special" full-screen panel active?
 	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
