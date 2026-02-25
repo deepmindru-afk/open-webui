@@ -642,6 +642,18 @@ OAUTH_UPDATE_PICTURE_ON_LOGIN = PersistentConfig(
     os.environ.get("OAUTH_UPDATE_PICTURE_ON_LOGIN", "False").lower() == "true",
 )
 
+OAUTH_UPDATE_NAME_ON_LOGIN = PersistentConfig(
+    "OAUTH_UPDATE_NAME_ON_LOGIN",
+    "oauth.update_name_on_login",
+    os.environ.get("OAUTH_UPDATE_NAME_ON_LOGIN", "False").lower() == "true",
+)
+
+OAUTH_UPDATE_EMAIL_ON_LOGIN = PersistentConfig(
+    "OAUTH_UPDATE_EMAIL_ON_LOGIN",
+    "oauth.update_email_on_login",
+    os.environ.get("OAUTH_UPDATE_EMAIL_ON_LOGIN", "False").lower() == "true",
+)
+
 OAUTH_ACCESS_TOKEN_REQUEST_INCLUDE_CLIENT_ID = (
     os.environ.get("OAUTH_ACCESS_TOKEN_REQUEST_INCLUDE_CLIENT_ID", "False").lower()
     == "true"
@@ -1285,6 +1297,17 @@ DEFAULT_GROUP_ID = PersistentConfig(
     "DEFAULT_GROUP_ID",
     "ui.default_group_id",
     os.environ.get("DEFAULT_GROUP_ID", ""),
+)
+
+# Controls the default "Who can share to this group" setting for new groups.
+# Env var values: "true" (anyone), "false" (no one), "members" (only group members).
+_default_group_share = os.environ.get(
+    "DEFAULT_GROUP_SHARE_PERMISSION", "members"
+).strip().lower()
+DEFAULT_GROUP_SHARE_PERMISSION = (
+    "members"
+    if _default_group_share == "members"
+    else _default_group_share == "true"
 )
 
 PENDING_USER_OVERLAY_TITLE = PersistentConfig(
