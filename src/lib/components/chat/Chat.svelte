@@ -42,11 +42,12 @@
 		functions,
 		selectedFolder,
 		pinnedChats,
-		showEmbeds
+		showEmbeds,
+		selectedTerminalId,
+		showFileNavPath
 	} from '$lib/stores';
 
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
-
 
 	import {
 		convertMessagesToHistory,
@@ -57,7 +58,8 @@
 		processDetails,
 		removeAllDetails,
 		getCodeBlockContents,
-		isYoutubeUrl
+		isYoutubeUrl,
+		displayFileHandler
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 
@@ -140,13 +142,18 @@
 
 	let selectedToolIds = [];
 	let selectedFilterIds = [];
+
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
 
-	// Auto-inject terminal servers into selected tool IDs so they act like toggled-on tools
+	// Auto-inject direct terminal servers into selected tool IDs so they act like toggled-on tools
+	// System terminals (with id field) are handled server-side via terminal_id, not as direct tool servers
 	$: if ($terminalServers && $terminalServers.length > 0) {
-		const terminalIds = $terminalServers.map((_, i) => `direct_server:terminal_${i}`);
+		const directTerminalServers = $terminalServers.filter((t) => !t.id);
+		const terminalIds = directTerminalServers.map(
+			(_, i) => `direct_server:terminal_${$terminalServers.indexOf(directTerminalServers[i])}`
+		);
 		const missingIds = terminalIds.filter((id) => !selectedToolIds.includes(id));
 		if (missingIds.length > 0) {
 			selectedToolIds = [...selectedToolIds, ...missingIds];
@@ -155,7 +162,10 @@
 
 	// Remove disabled terminal servers from selectedToolIds automatically
 	$: if (selectedToolIds.length > 0) {
-		const terminalIds = ($terminalServers ?? []).map((_, i) => `direct_server:terminal_${i}`);
+		const directTerminalServers = ($terminalServers ?? []).filter((t) => !t.id);
+		const terminalIds = directTerminalServers.map(
+			(_, i) => `direct_server:terminal_${($terminalServers ?? []).indexOf(directTerminalServers[i])}`
+		);
 		const invalidTerminalIds = selectedToolIds.filter(
 			(id) => id.startsWith('direct_server:terminal_') && !terminalIds.includes(id)
 		);
@@ -354,9 +364,12 @@
 				selectedToolIds = selectedToolIds.filter((id) => !id.startsWith('direct_server:'));
 			}
 
-			// Auto-inject terminal servers
+			// Auto-inject direct terminal servers (system ones are handled via terminal_id)
 			if ($terminalServers && $terminalServers.length > 0) {
-				const terminalIds = $terminalServers.map((_, i) => `direct_server:terminal_${i}`);
+				const directTerminalServers = $terminalServers.filter((t) => !t.id);
+				const terminalIds = directTerminalServers.map(
+					(_, i) => `direct_server:terminal_${$terminalServers.indexOf(directTerminalServers[i])}`
+				);
 				selectedToolIds = [...new Set([...selectedToolIds, ...terminalIds])];
 			}
 
@@ -565,6 +578,10 @@
 					eventConfirmationInputPlaceholder = data.placeholder;
 					eventConfirmationInputValue = data?.value ?? '';
 					eventConfirmationInputType = data?.type ?? '';
+				} else if (type === 'display_file') {
+					if (data?.path) {
+						displayFileHandler(data.path, { showControls, showFileNavPath });
+					}
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -649,6 +666,14 @@
 		$socket?.on('events', chatEventHandler);
 
 		audioQueue.set(new AudioQueue(document.getElementById('audioElement')));
+
+		// Reset direct terminal enabled states — selectedTerminalId starts null on every page load
+		if ($settings?.terminalServers?.some((s) => s.enabled)) {
+			settings.set({
+				...$settings,
+				terminalServers: ($settings.terminalServers ?? []).map((s) => ({ ...s, enabled: false }))
+			});
+		}
 
 		pageSubscribe = page.subscribe(async (p) => {
 			if (p.url.pathname === '/') {
@@ -2130,9 +2155,8 @@
 			});
 		}
 
-		// Determine the active terminal (first accessible backend terminal, or user-configured)
-		const activeTerminal = $terminalServers?.[0] ?? null;
-		const activeTerminalId = activeTerminal?.id ?? null;
+		// Use the user-selected terminal from the dropdown
+		const activeTerminalId = $selectedTerminalId ?? null;
 
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
