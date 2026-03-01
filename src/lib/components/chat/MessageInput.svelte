@@ -11,7 +11,7 @@
 	dayjs.extend(duration);
 	dayjs.extend(relativeTime);
 
-	import { onMount, tick, getContext, createEventDispatcher, onDestroy } from 'svelte';
+	import { onMount, tick, getContext, createEventDispatcher } from 'svelte';
 
 	import { createPicker, getAuthToken } from '$lib/utils/google-drive-picker';
 	import { pickAndDownloadFile } from '$lib/utils/onedrive-file-picker';
@@ -798,7 +798,7 @@
 		}
 	};
 
-	const onDragOver = (e) => {
+	const onDragOver = (e: DragEvent) => {
 		e.preventDefault();
 
 		// Check if a file is being dragged.
@@ -809,14 +809,14 @@
 		}
 	};
 
-	const onDragLeave = (e) => {
-		if (e.currentTarget.contains(e.relatedTarget)) {
+	const onDragLeave = (e: DragEvent) => {
+		if ((e.currentTarget as HTMLElement)?.contains(e.relatedTarget as Node)) {
 			return;
 		}
 		dragged = false;
 	};
 
-	const onDrop = async (e) => {
+	const onDrop = async (e: DragEvent) => {
 		e.preventDefault();
 		console.log(e);
 
@@ -831,7 +831,7 @@
 		dragged = false;
 	};
 
-	const onKeyDown = (e) => {
+	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key === 'Shift') {
 			shiftKey = true;
 		}
@@ -855,7 +855,7 @@
 		}
 	};
 
-	const onKeyUp = (e) => {
+	const onKeyUp = (e: KeyboardEvent) => {
 		if (e.key === 'Shift') {
 			shiftKey = false;
 		}
@@ -867,7 +867,7 @@
 		shiftKey = false;
 	};
 
-	onMount(async () => {
+	onMount(() => {
 		suggestions = [
 			{
 				char: '@',
@@ -1000,32 +1000,38 @@
 		window.addEventListener('focus', onFocus);
 		window.addEventListener('blur', onBlur);
 
-		await tick();
+		let isDestroyed = false;
+		let dropzoneElement: HTMLElement | null = null;
+		const initialize = async () => {
+			await tick();
+			if (isDestroyed) return;
 
-		const dropzoneElement = document.getElementById('chat-pane');
+			dropzoneElement = document.getElementById('chat-pane');
+			if (dropzoneElement) {
+				dropzoneElement.addEventListener('dragover', onDragOver);
+				dropzoneElement.addEventListener('drop', onDrop);
+				dropzoneElement.addEventListener('dragleave', onDragLeave);
+			}
 
-		dropzoneElement?.addEventListener('dragover', onDragOver);
-		dropzoneElement?.addEventListener('drop', onDrop);
-		dropzoneElement?.addEventListener('dragleave', onDragLeave);
+			tools.set(await getTools(localStorage.token));
+		};
+		initialize();
 
-		await tools.set(await getTools(localStorage.token));
-	});
+		return () => {
+			isDestroyed = true;
 
-	onDestroy(() => {
-		console.log('destroy');
-		window.removeEventListener('keydown', onKeyDown);
-		window.removeEventListener('keyup', onKeyUp);
+			window.removeEventListener('keydown', onKeyDown);
+			window.removeEventListener('keyup', onKeyUp);
 
-		window.removeEventListener('focus', onFocus);
-		window.removeEventListener('blur', onBlur);
+			window.removeEventListener('focus', onFocus);
+			window.removeEventListener('blur', onBlur);
 
-		const dropzoneElement = document.getElementById('chat-pane');
-
-		if (dropzoneElement) {
-			dropzoneElement?.removeEventListener('dragover', onDragOver);
-			dropzoneElement?.removeEventListener('drop', onDrop);
-			dropzoneElement?.removeEventListener('dragleave', onDragLeave);
-		}
+			if (dropzoneElement) {
+				dropzoneElement.removeEventListener('dragover', onDragOver);
+				dropzoneElement.removeEventListener('drop', onDrop);
+				dropzoneElement.removeEventListener('dragleave', onDragLeave);
+			}
+		};
 	});
 </script>
 
@@ -1803,7 +1809,9 @@
 
 										{#if (!history?.currentId || history.messages[history.currentId]?.done == true) && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true))}
 											<!-- Terminal Server Selector -->
-											<TerminalMenu bind:show={showTerminalMenu} />
+											{#if ($terminalServers ?? []).length > 0 || ($settings?.terminalServers ?? []).some((s) => s.url)}
+												<TerminalMenu bind:show={showTerminalMenu} />
+											{/if}
 
 											<!-- {$i18n.t('Record voice')} -->
 											<Tooltip content={$i18n.t('Dictate')}>

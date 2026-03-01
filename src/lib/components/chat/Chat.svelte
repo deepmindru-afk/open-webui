@@ -164,7 +164,8 @@
 	$: if (selectedToolIds.length > 0) {
 		const directTerminalServers = ($terminalServers ?? []).filter((t) => !t.id);
 		const terminalIds = directTerminalServers.map(
-			(_, i) => `direct_server:terminal_${($terminalServers ?? []).indexOf(directTerminalServers[i])}`
+			(_, i) =>
+				`direct_server:terminal_${($terminalServers ?? []).indexOf(directTerminalServers[i])}`
 		);
 		const invalidTerminalIds = selectedToolIds.filter(
 			(id) => id.startsWith('direct_server:terminal_') && !terminalIds.includes(id)
@@ -1281,6 +1282,16 @@
 			});
 		}
 	};
+
+	let scrollRAF = null;
+	const scheduleScrollToBottom = () => {
+		if (!scrollRAF) {
+			scrollRAF = requestAnimationFrame(async () => {
+				scrollRAF = null;
+				await scrollToBottom();
+			});
+		}
+	};
 	const chatCompletedHandler = async (_chatId, modelId, responseMessageId, messages) => {
 		const res = await chatCompleted(localStorage.token, {
 			model: modelId,
@@ -1698,7 +1709,7 @@
 		await tick();
 
 		if (autoScroll) {
-			scrollToBottom();
+			scheduleScrollToBottom();
 		}
 	};
 
@@ -2482,7 +2493,7 @@
 					}
 
 					if (autoScroll) {
-						scrollToBottom();
+						scheduleScrollToBottom();
 					}
 				}
 

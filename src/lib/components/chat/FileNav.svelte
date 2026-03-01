@@ -19,7 +19,11 @@
 		type FileEntry
 	} from '$lib/apis/terminal';
 	import Folder from '../icons/Folder.svelte';
+	import Document from '../icons/Document.svelte';
+	import PenAlt from '../icons/PenAlt.svelte';
+	import Reset from '../icons/Reset.svelte';
 	import Spinner from '../common/Spinner.svelte';
+	import Tooltip from '../common/Tooltip.svelte';
 	import ConfirmDialog from '../common/ConfirmDialog.svelte';
 
 	import FileNavToolbar from './FileNav/FileNavToolbar.svelte';
@@ -44,12 +48,28 @@
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
 
+	// ── File preview toolbar state (bound from FilePreview) ─────────────
+	let editing = false;
+	let showRaw = false;
+	let saving = false;
+
+	const MD_EXTS = new Set(['md', 'markdown', 'mdx']);
+	const CSV_EXTS = new Set(['csv', 'tsv']);
+	const getFileExt = (path: string | null) => path?.split('.').pop()?.toLowerCase() ?? '';
+
+	$: isMarkdown = MD_EXTS.has(getFileExt(selectedFile));
+	$: isCsv = CSV_EXTS.has(getFileExt(selectedFile));
+	$: isTextFile = fileContent !== null && fileImageUrl === null && filePdfData === null;
+
 	// ── Upload / folder creation ─────────────────────────────────────────
 	let isDragOver = false;
 	let uploading = false;
 	let creatingFolder = false;
 	let newFolderName = '';
 	let newFolderInput: HTMLInputElement;
+	let creatingFile = false;
+	let newFileName = '';
+	let newFileInput: HTMLInputElement;
 
 	// ── Delete confirmation ──────────────────────────────────────────────
 	let deleteTarget: { path: string; name: string } | null = null;
@@ -61,8 +81,8 @@
 
 	const getTerminal = (): { url: string; key: string } | null => {
 		const systemTerminal = $selectedTerminalId
-			? ($terminalServers ?? []).find((t) => t.id === $selectedTerminalId) ?? null
-			: $terminalServers?.[0] ?? null;
+			? (($terminalServers ?? []).find((t) => t.id === $selectedTerminalId) ?? null)
+			: ($terminalServers?.[0] ?? null);
 
 		const userTerminal = ($settings?.terminalServers ?? []).find(
 			(s) => s.url === $selectedTerminalId
@@ -257,6 +277,29 @@
 		await loadDir(currentPath);
 	};
 
+	// ── File creation ────────────────────────────────────────────────────
+	const startNewFile = async () => {
+		creatingFile = true;
+		newFileName = '';
+		await tick();
+		newFileInput?.focus();
+	};
+
+	const submitNewFile = async () => {
+		const name = newFileName.trim();
+		creatingFile = false;
+		newFileName = '';
+		if (!name) return;
+
+		const terminal = selectedTerminal;
+		if (!terminal) return;
+
+		const emptyFile = new File([''], name, { type: 'application/octet-stream' });
+		const result = await uploadToTerminal(terminal.url, terminal.key, currentPath, emptyFile);
+		toast[result ? 'success' : 'error']($i18n.t(result ? 'File created' : 'Failed to create file'));
+		await loadDir(currentPath);
+	};
+
 	// ── Delete ───────────────────────────────────────────────────────────
 	const handleDelete = async (path: string, name: string) => {
 		const terminal = selectedTerminal;
@@ -397,20 +440,175 @@
 			onNavigate={loadDir}
 			onRefresh={() => loadDir(currentPath)}
 			onNewFolder={startNewFolder}
+			onNewFile={startNewFile}
 			onUploadFiles={handleUploadFiles}
-		/>
+		>
+			{#if fileImageUrl !== null}
+				<Tooltip content={$i18n.t('Reset view')}>
+					<button
+						class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+						on:click={() => filePreviewRef?.resetImageView()}
+						aria-label={$i18n.t('Reset view')}
+					>
+						<Reset className="size-3.5" />
+					</button>
+				</Tooltip>
+			{/if}
+			{#if (isMarkdown || isCsv) && fileContent !== null}
+				<Tooltip content={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}>
+					<button
+						class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+						on:click={() => {
+							if (editing) filePreviewRef?.cancelEdit();
+							showRaw = !showRaw;
+						}}
+						aria-label={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}
+					>
+						{#if showRaw}
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.5"
+								class="size-3.5"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"
+								/>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+								/>
+							</svg>
+						{:else}
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.5"
+								class="size-3.5"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5"
+								/>
+							</svg>
+						{/if}
+					</button>
+				</Tooltip>
+			{/if}
+			{#if isTextFile}
+				{#if editing}
+					<Tooltip content={$i18n.t('Cancel')}>
+						<button
+							class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+							on:click={() => filePreviewRef?.cancelEdit()}
+							aria-label={$i18n.t('Cancel')}
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 20 20"
+								fill="currentColor"
+								class="size-3.5"
+							>
+								<path
+									d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
+								/>
+							</svg>
+						</button>
+					</Tooltip>
+					<Tooltip content={$i18n.t('Save')}>
+						<button
+							class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+							on:click={() => filePreviewRef?.saveEdit()}
+							disabled={saving}
+							aria-label={$i18n.t('Save')}
+						>
+							{#if saving}
+								<Spinner className="size-3.5" />
+							{:else}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 20 20"
+									fill="currentColor"
+									class="size-3.5"
+								>
+									<path
+										fill-rule="evenodd"
+										d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+										clip-rule="evenodd"
+									/>
+								</svg>
+							{/if}
+						</button>
+					</Tooltip>
+				{:else}
+					<Tooltip content={$i18n.t('Edit')}>
+						<button
+							class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+							on:click={() => filePreviewRef?.startEdit()}
+							aria-label={$i18n.t('Edit')}
+						>
+							<PenAlt className="size-3.5" />
+						</button>
+					</Tooltip>
+				{/if}
+			{/if}
+			<Tooltip content={$i18n.t('Download')}>
+				<button
+					class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+					on:click={() => downloadFile(selectedFile)}
+					aria-label={$i18n.t('Download')}
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						class="size-3.5"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+		</FileNavToolbar>
 
 		<!-- Content -->
 		<div class="flex-1 overflow-y-auto min-h-0">
 			{#if selectedFile !== null}
 				<FilePreview
 					bind:this={filePreviewRef}
+					bind:editing
+					bind:showRaw
+					bind:saving
 					{selectedFile}
 					{fileLoading}
 					{fileImageUrl}
 					{filePdfData}
 					{fileContent}
-					onDownload={() => downloadFile(selectedFile)}
+					onSave={async (content) => {
+						const terminal = selectedTerminal;
+						if (!terminal || !selectedFile) return;
+						const fileName = selectedFile.split('/').pop() ?? 'file';
+						const dir = selectedFile.substring(0, selectedFile.lastIndexOf('/') + 1) || '/';
+						const file = new File([content], fileName, { type: 'text/plain' });
+						const result = await uploadToTerminal(terminal.url, terminal.key, dir, file);
+						toast[result ? 'success' : 'error'](
+							$i18n.t(result ? 'File saved' : 'Failed to save file')
+						);
+						if (result) fileContent = content;
+					}}
 				/>
 			{:else}
 				{#if uploading}
@@ -421,8 +619,8 @@
 				{:else if loading}
 					<div class="flex justify-center pt-8"><Spinner className="size-4" /></div>
 				{:else if error}
-					<div class="p-4 text-xs text-red-500 dark:text-red-400">{error}</div>
-				{:else if entries.length === 0 && !creatingFolder}
+					<div class="p-4 text-xs">{error}</div>
+				{:else if entries.length === 0 && !creatingFolder && !creatingFile}
 					<div class="flex flex-col items-center justify-center gap-1.5 py-12 text-center">
 						<Folder className="size-6 text-gray-200 dark:text-gray-700" />
 						<div class="text-xs text-gray-400 dark:text-gray-500">
@@ -454,8 +652,27 @@
 							/>
 						</div>
 					{/if}
+					{#if creatingFile}
+						<div class="flex items-center gap-2 px-3 py-1.5">
+							<Document className="size-4 shrink-0 text-gray-400 dark:text-gray-500" />
+							<input
+								bind:this={newFileInput}
+								bind:value={newFileName}
+								class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+								placeholder={$i18n.t('File name')}
+								on:keydown={(e) => {
+									if (e.key === 'Enter') submitNewFile();
+									if (e.key === 'Escape') {
+										creatingFile = false;
+										newFileName = '';
+									}
+								}}
+								on:blur={submitNewFile}
+							/>
+						</div>
+					{/if}
 
-					{#if entries.length > 0 || creatingFolder}
+					{#if entries.length > 0 || creatingFolder || creatingFile}
 						<ul>
 							{#each entries as entry}
 								<FileEntryRow

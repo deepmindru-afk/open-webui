@@ -1,12 +1,10 @@
 <script lang="ts">
-	import { getContext, onDestroy } from 'svelte';
+	import { getContext, onDestroy, tick } from 'svelte';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 	import Spinner from '../../common/Spinner.svelte';
 	import PDFViewer from '../../common/PDFViewer.svelte';
-	import Tooltip from '../../common/Tooltip.svelte';
-	import Reset from '../../icons/Reset.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -16,7 +14,44 @@
 	export let filePdfData: ArrayBuffer | null = null;
 	export let fileContent: string | null = null;
 
-	export let onDownload: () => void = () => {};
+	export let onSave: ((content: string) => Promise<void>) | null = null;
+
+	export let editing = false;
+	let editContent = '';
+	export let saving = false;
+	let editTextarea: HTMLTextAreaElement;
+
+	// Reset edit state when switching files
+	$: selectedFile, resetEdit();
+
+	const resetEdit = () => {
+		editing = false;
+		editContent = '';
+		saving = false;
+	};
+
+	export const startEdit = async () => {
+		editContent = fileContent ?? '';
+		editing = true;
+		showRaw = true;
+		await tick();
+		editTextarea?.focus();
+	};
+
+	export const saveEdit = async () => {
+		if (!onSave) return;
+		saving = true;
+		await onSave(editContent);
+		saving = false;
+		editing = false;
+	};
+
+	export const cancelEdit = () => {
+		editing = false;
+		editContent = '';
+	};
+
+	$: isTextFile = fileContent !== null && fileImageUrl === null && filePdfData === null;
 
 	const MD_EXTS = new Set(['md', 'markdown', 'mdx']);
 	const CSV_EXTS = new Set(['csv', 'tsv']);
@@ -73,7 +108,7 @@
 	$: csvHeader = csvRows.length > 0 ? csvRows[0] : [];
 	$: csvBody = csvRows.length > 1 ? csvRows.slice(1) : [];
 
-	let showRaw = false;
+	export let showRaw = false;
 	$: selectedFile, (showRaw = false); // reset to preview mode when switching files
 
 	let pzInstance: PanZoom | null = null;
@@ -86,7 +121,7 @@
 		});
 	};
 
-	const resetImageView = () => {
+	export const resetImageView = () => {
 		if (pzInstance) {
 			pzInstance.moveTo(0, 0);
 			pzInstance.zoomAbs(0, 0, 1);
@@ -110,89 +145,6 @@
 		? 'overflow-hidden'
 		: 'overflow-y-auto'} min-h-0 relative h-full"
 >
-	<!-- Floating action buttons -->
-	<div class="absolute top-2 right-2 z-10 flex gap-1">
-		{#if fileImageUrl !== null}
-			<Tooltip content={$i18n.t('Reset view')}>
-				<button
-					class="p-1.5 rounded-lg bg-white/80 dark:bg-gray-850/80 backdrop-blur-sm shadow-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-					on:click={resetImageView}
-					aria-label={$i18n.t('Reset view')}
-				>
-					<Reset className="size-4" />
-				</button>
-			</Tooltip>
-		{/if}
-		{#if (isMarkdown || isCsv) && fileContent !== null}
-			<Tooltip content={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}>
-				<button
-					class="p-1.5 rounded-lg bg-white/80 dark:bg-gray-850/80 backdrop-blur-sm shadow-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-					on:click={() => (showRaw = !showRaw)}
-					aria-label={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}
-				>
-					{#if showRaw}
-						<!-- Eye icon: switch to preview -->
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							class="size-4"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"
-							/>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
-							/>
-						</svg>
-					{:else}
-						<!-- Code icon: switch to raw -->
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							class="size-4"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5"
-							/>
-						</svg>
-					{/if}
-				</button>
-			</Tooltip>
-		{/if}
-		<button
-			class="p-1.5 rounded-lg bg-white/80 dark:bg-gray-850/80 backdrop-blur-sm shadow-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-			on:click={onDownload}
-			aria-label={$i18n.t('Download')}
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.5"
-				class="size-4"
-			>
-				<path
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
-				/>
-			</svg>
-		</button>
-	</div>
-
 	<!-- File preview -->
 	{#if fileLoading}
 		<div class="flex items-center justify-center h-full"><Spinner className="size-4" /></div>
@@ -239,6 +191,13 @@
 					</tbody>
 				</table>
 			</div>
+		{:else if editing}
+			<textarea
+				bind:this={editTextarea}
+				bind:value={editContent}
+				class="w-full h-full text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre break-all leading-relaxed p-3 bg-transparent border-none outline-none resize-none"
+				spellcheck="false"
+			/>
 		{:else}
 			<pre
 				class="text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all leading-relaxed p-3">{fileContent}</pre>
