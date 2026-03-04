@@ -484,13 +484,17 @@
 			const dir = lastSlash > 0 ? filePath.substring(0, lastSlash + 1) : '/';
 			const fileName = filePath.substring(lastSlash + 1);
 
-			if (dir !== currentPath) {
-				await loadDir(dir);
-			}
-
+			// Always reload directory to ensure entries are fresh
+			await loadDir(dir);
 			await tick();
+
 			const entry = entries.find((e) => e.name === fileName);
-			if (entry) await openEntry(entry);
+			if (entry) {
+				await openEntry(entry);
+			} else {
+				// File may not be in listing; open it directly
+				await openEntry({ name: fileName, type: 'file', size: 0 });
+			}
 		});
 
 		const unsubFileNavDir = showFileNavDir.subscribe(async (filePath) => {
@@ -609,7 +613,14 @@
 			{selectedFile}
 			{loading}
 			onNavigate={loadDir}
-			onRefresh={() => loadDir(currentPath)}
+			onRefresh={() => {
+				if (selectedFile) {
+					const fileName = selectedFile.split('/').pop() ?? '';
+					openEntry({ name: fileName, type: 'file', size: 0 });
+				} else {
+					loadDir(currentPath);
+				}
+			}}
 			onNewFolder={startNewFolder}
 			onNewFile={startNewFile}
 			onUploadFiles={handleUploadFiles}
