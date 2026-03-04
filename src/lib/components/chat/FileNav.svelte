@@ -26,6 +26,7 @@
 		setCwd,
 		type FileEntry
 	} from '$lib/apis/terminal';
+	import { isCodeFile } from '$lib/utils/codeHighlight';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
 	import PenAlt from '../icons/PenAlt.svelte';
@@ -37,6 +38,7 @@
 	import FileNavToolbar from './FileNav/FileNavToolbar.svelte';
 	import FilePreview from './FileNav/FilePreview.svelte';
 	import FileEntryRow from './FileNav/FileEntryRow.svelte';
+	import PortList from './FileNav/PortList.svelte';
 	import XTerminal from './XTerminal.svelte';
 
 	const i18n = getContext('i18n');
@@ -89,9 +91,19 @@
 	let selectedFile: string | null = null;
 	let fileContent: string | null = null;
 	let fileImageUrl: string | null = null;
+	let fileVideoUrl: string | null = null;
+	let fileAudioUrl: string | null = null;
 	let filePdfData: ArrayBuffer | null = null;
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
+
+	// ── Office preview state ────────────────────────────────────────────
+	let fileOfficeHtml: string | null = null;
+	let fileOfficeSlides: string[] | null = null;
+	let currentSlide = 0;
+	let excelSheetNames: string[] = [];
+	let selectedExcelSheet = '';
+	let excelWorkbook: import('xlsx').WorkBook | null = null;
 
 	// ── File preview toolbar state (bound from FilePreview) ─────────────
 	let editing = false;
@@ -101,12 +113,19 @@
 	const MD_EXTS = new Set(['md', 'markdown', 'mdx']);
 	const CSV_EXTS = new Set(['csv', 'tsv']);
 	const HTML_EXTS = new Set(['html', 'htm']);
+	const OFFICE_EXTS = new Set(['docx', 'xlsx', 'pptx']);
 	const getFileExt = (path: string | null) => path?.split('.').pop()?.toLowerCase() ?? '';
 
 	$: isMarkdown = MD_EXTS.has(getFileExt(selectedFile));
 	$: isCsv = CSV_EXTS.has(getFileExt(selectedFile));
 	$: isHtml = HTML_EXTS.has(getFileExt(selectedFile));
-	$: isTextFile = fileContent !== null && fileImageUrl === null && filePdfData === null;
+	$: isJson = ['json', 'jsonc', 'jsonl', 'json5'].includes(getFileExt(selectedFile));
+	$: isSvg = getFileExt(selectedFile) === 'svg';
+	$: isNotebook = getFileExt(selectedFile) === 'ipynb';
+	$: isCode = isCodeFile(selectedFile);
+	$: isOfficeFile = OFFICE_EXTS.has(getFileExt(selectedFile));
+	$: isTextFile =
+		fileContent !== null && fileImageUrl === null && filePdfData === null && !isOfficeFile;
 
 	// ── Upload / folder creation ─────────────────────────────────────────
 	let isDragOver = false;
@@ -166,9 +185,14 @@
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
-	const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
+	const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']);
+	const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'ogv', 'avi', 'mkv']);
+	const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'wma', 'opus']);
 	const isImage = (path: string) => IMAGE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
+	const isVideo = (path: string) => VIDEO_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
+	const isAudio = (path: string) => AUDIO_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 	const isPdf = (path: string) => path.split('.').pop()?.toLowerCase() === 'pdf';
+	const isOffice = (path: string) => OFFICE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 
 	const buildBreadcrumbs = (path: string) =>
 		path
@@ -191,7 +215,21 @@
 			URL.revokeObjectURL(fileImageUrl);
 			fileImageUrl = null;
 		}
+		if (fileVideoUrl) {
+			URL.revokeObjectURL(fileVideoUrl);
+			fileVideoUrl = null;
+		}
+		if (fileAudioUrl) {
+			URL.revokeObjectURL(fileAudioUrl);
+			fileAudioUrl = null;
+		}
 		filePdfData = null;
+		fileOfficeHtml = null;
+		fileOfficeSlides = null;
+		currentSlide = 0;
+		excelSheetNames = [];
+		selectedExcelSheet = '';
+		excelWorkbook = null;
 	};
 
 	// ── Directory operations ─────────────────────────────────────────────
@@ -241,9 +279,48 @@
 		if (isImage(filePath)) {
 			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
 			if (result) fileImageUrl = URL.createObjectURL(result.blob);
+		} else if (isVideo(filePath)) {
+			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
+			if (result) fileVideoUrl = URL.createObjectURL(result.blob);
+		} else if (isAudio(filePath)) {
+			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
+			if (result) fileAudioUrl = URL.createObjectURL(result.blob);
 		} else if (isPdf(filePath)) {
 			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
 			if (result) filePdfData = await result.blob.arrayBuffer();
+		} else if (isOffice(filePath)) {
+			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
+			if (result) {
+				const ext = getFileExt(filePath);
+				const arrayBuffer = await result.blob.arrayBuffer();
+				try {
+					if (ext === 'docx') {
+						const mammoth = await import('mammoth');
+						const res = await mammoth.convertToHtml({ arrayBuffer });
+						const DOMPurify = (await import('dompurify')).default;
+						fileOfficeHtml = DOMPurify.sanitize(res.value);
+					} else if (ext === 'xlsx') {
+						const XLSX = await import('xlsx');
+						const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+						excelWorkbook = wb;
+						excelSheetNames = wb.SheetNames;
+						if (excelSheetNames.length > 0) {
+							selectedExcelSheet = excelSheetNames[0];
+							const { excelToTable } = await import('$lib/utils/excelToTable');
+							const result = await excelToTable(wb.Sheets[selectedExcelSheet]);
+							fileOfficeHtml = result.html;
+						}
+					} else if (ext === 'pptx') {
+						const { pptxToImages } = await import('$lib/utils/pptxToHtml');
+						const result = await pptxToImages(arrayBuffer);
+						fileOfficeSlides = result.images;
+						currentSlide = 0;
+					}
+				} catch (e) {
+					console.error('Failed to render Office file:', e);
+					fileContent = `Error previewing file: ${e instanceof Error ? e.message : 'Unknown error'}`;
+				}
+			}
 		} else {
 			fileContent = await readFile(terminal.url, terminal.key, filePath);
 		}
@@ -470,6 +547,8 @@
 
 	onDestroy(() => {
 		if (fileImageUrl) URL.revokeObjectURL(fileImageUrl);
+		if (fileVideoUrl) URL.revokeObjectURL(fileVideoUrl);
+		if (fileAudioUrl) URL.revokeObjectURL(fileAudioUrl);
 	});
 </script>
 
@@ -536,7 +615,7 @@
 			onUploadFiles={handleUploadFiles}
 			onMove={handleMove}
 		>
-			{#if fileImageUrl !== null}
+			{#if fileImageUrl !== null || (fileOfficeSlides !== null && fileOfficeSlides.length > 0)}
 				<Tooltip content={$i18n.t('Reset view')}>
 					<button
 						class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
@@ -558,7 +637,7 @@
 					</button>
 				</Tooltip>
 			{/if}
-			{#if (isMarkdown || isCsv || isHtml) && fileContent !== null && !editing}
+			{#if (isMarkdown || isCsv || isHtml || isCode || isJson || isSvg || isNotebook) && fileContent !== null && !editing}
 				<Tooltip content={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}>
 					<button
 						class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
@@ -664,6 +743,7 @@
 					</Tooltip>
 				{/if}
 			{/if}
+
 			<Tooltip content={$i18n.t('Download')}>
 				<button
 					class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
@@ -696,11 +776,25 @@
 					bind:editing
 					bind:showRaw
 					bind:saving
+					bind:currentSlide
 					{selectedFile}
 					{fileLoading}
 					{fileImageUrl}
+					{fileVideoUrl}
+					{fileAudioUrl}
 					{filePdfData}
 					{fileContent}
+					{fileOfficeHtml}
+					{fileOfficeSlides}
+					{excelSheetNames}
+					{selectedExcelSheet}
+					onSheetChange={async (sheet) => {
+						if (!excelWorkbook) return;
+						selectedExcelSheet = sheet;
+						const { excelToTable } = await import('$lib/utils/excelToTable');
+						const result = await excelToTable(excelWorkbook.Sheets[sheet]);
+						fileOfficeHtml = result.html;
+					}}
 					{overlay}
 					onSave={async (content) => {
 						const terminal = selectedTerminal;
@@ -796,6 +890,13 @@
 				{/if}
 			{/if}
 		</div>
+
+		<!-- Port detection -->
+		{#if selectedTerminal && !selectedFile}
+			<div class="shrink-0 border-t border-gray-100 dark:border-gray-800">
+				<PortList baseUrl={selectedTerminal.url} apiKey={selectedTerminal.key} />
+			</div>
+		{/if}
 
 		<!-- Terminal bottom panel -->
 		{#if terminalEnabled}
