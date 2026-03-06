@@ -94,6 +94,7 @@
 	let fileVideoUrl: string | null = null;
 	let fileAudioUrl: string | null = null;
 	let filePdfData: ArrayBuffer | null = null;
+	let fileSqliteData: ArrayBuffer | null = null;
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
 
@@ -188,9 +189,11 @@
 	const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']);
 	const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'ogv', 'avi', 'mkv']);
 	const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'wma', 'opus']);
+	const SQLITE_EXTS = new Set(['db', 'sqlite', 'sqlite3', 'db3']);
 	const isImage = (path: string) => IMAGE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 	const isVideo = (path: string) => VIDEO_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 	const isAudio = (path: string) => AUDIO_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
+	const isSqlite = (path: string) => SQLITE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 	const isPdf = (path: string) => path.split('.').pop()?.toLowerCase() === 'pdf';
 	const isOffice = (path: string) => OFFICE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 
@@ -224,6 +227,7 @@
 			fileAudioUrl = null;
 		}
 		filePdfData = null;
+		fileSqliteData = null;
 		fileOfficeHtml = null;
 		fileOfficeSlides = null;
 		currentSlide = 0;
@@ -288,6 +292,9 @@
 		} else if (isPdf(filePath)) {
 			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
 			if (result) filePdfData = await result.blob.arrayBuffer();
+		} else if (isSqlite(filePath)) {
+			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
+			if (result) fileSqliteData = await result.blob.arrayBuffer();
 		} else if (isOffice(filePath)) {
 			const result = await downloadFileBlob(terminal.url, terminal.key, filePath);
 			if (result) {
@@ -504,13 +511,15 @@
 			const lastSlash = filePath.lastIndexOf('/');
 			const dir = lastSlash > 0 ? filePath.substring(0, lastSlash + 1) : '/';
 
-			if (dir === currentPath) {
-				await loadDir(currentPath);
-			}
-			if (filePath === selectedFile) {
-				const fileName = filePath.substring(lastSlash + 1);
-				const entry = entries.find((e) => e.name === fileName);
-				if (entry) await openEntry(entry);
+			if (selectedFile) {
+				if (selectedFile === filePath || currentPath.startsWith(dir)) {
+					const fileName = selectedFile.split('/').pop() ?? '';
+					await openEntry({ name: fileName, type: 'file', size: 0 });
+				}
+			} else {
+				if (currentPath.startsWith(dir) || dir.startsWith(currentPath)) {
+					await loadDir(currentPath);
+				}
 			}
 		});
 
@@ -542,6 +551,8 @@
 		document.addEventListener('visibilitychange', onVisibilityChange);
 
 		return () => {
+			unsubFileNav();
+			unsubFileNavDir();
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
 			window.removeEventListener('blur', onBlur);
@@ -755,6 +766,33 @@
 				{/if}
 			{/if}
 
+			{#if fileContent !== null}
+				<Tooltip content={$i18n.t('Copy')}>
+					<button
+						class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
+						on:click={async () => {
+							await navigator.clipboard.writeText(fileContent ?? '');
+							toast.success($i18n.t('Copied to clipboard'));
+						}}
+						aria-label={$i18n.t('Copy')}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							class="size-3.5"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184"
+							/>
+						</svg>
+					</button>
+				</Tooltip>
+			{/if}
 			<Tooltip content={$i18n.t('Download')}>
 				<button
 					class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
@@ -794,6 +832,7 @@
 					{fileVideoUrl}
 					{fileAudioUrl}
 					{filePdfData}
+					{fileSqliteData}
 					{fileContent}
 					{fileOfficeHtml}
 					{fileOfficeSlides}
@@ -806,6 +845,8 @@
 						const result = await excelToTable(excelWorkbook.Sheets[sheet]);
 						fileOfficeHtml = result.html;
 					}}
+					baseUrl={selectedTerminal?.url ?? ''}
+					apiKey={selectedTerminal?.key ?? ''}
 					{overlay}
 					onSave={async (content) => {
 						const terminal = selectedTerminal;

@@ -5,10 +5,12 @@
 	import DOMPurify from 'dompurify';
 	import { settings } from '$lib/stores';
 	import { isCodeFile, highlightCode } from '$lib/utils/codeHighlight';
+	import { initMermaid, renderMermaidDiagram } from '$lib/utils';
 	import Spinner from '../../common/Spinner.svelte';
 	import PDFViewer from '../../common/PDFViewer.svelte';
 	import JsonTreeView from './JsonTreeView.svelte';
 	import NotebookView from './NotebookView.svelte';
+	import SqliteView from './SqliteView.svelte';
 
 	let pdfViewerRef: PDFViewer;
 
@@ -20,7 +22,12 @@
 	export let fileVideoUrl: string | null = null;
 	export let fileAudioUrl: string | null = null;
 	export let filePdfData: ArrayBuffer | null = null;
+	export let fileSqliteData: ArrayBuffer | null = null;
 	export let fileContent: string | null = null;
+
+	// Terminal connection for notebook execution
+	export let baseUrl: string = '';
+	export let apiKey: string = '';
 
 	// Office preview props
 	export let fileOfficeHtml: string | null = null;
@@ -89,6 +96,41 @@
 		isMarkdown && fileContent
 			? DOMPurify.sanitize(marked.parse(fileContent, { async: false }) as string)
 			: '';
+
+	let markdownEl: HTMLDivElement;
+	let mermaidInstance: any = null;
+
+	const renderMermaidBlocks = async (el: HTMLDivElement) => {
+		if (!el) return;
+		const codeEls = el.querySelectorAll('code.language-mermaid');
+		if (codeEls.length === 0) return;
+
+		if (!mermaidInstance) {
+			mermaidInstance = await initMermaid();
+		}
+
+		for (const codeEl of codeEls) {
+			const pre = codeEl.parentElement;
+			if (!pre || pre.tagName !== 'PRE' || pre.dataset.mermaidRendered) continue;
+			pre.dataset.mermaidRendered = 'true';
+
+			try {
+				const svg = await renderMermaidDiagram(mermaidInstance, codeEl.textContent ?? '');
+				if (svg) {
+					const wrapper = document.createElement('div');
+					wrapper.className = 'mermaid-diagram flex justify-center py-2';
+					wrapper.innerHTML = svg;
+					pre.replaceWith(wrapper);
+				}
+			} catch (e) {
+				console.error('Mermaid render error:', e);
+			}
+		}
+	};
+
+	$: if (renderedHtml && markdownEl) {
+		tick().then(() => renderMermaidBlocks(markdownEl));
+	}
 
 	// Simple CSV parser that handles quoted fields
 	const parseCsv = (text: string, delimiter: string): string[][] => {
@@ -268,6 +310,8 @@
 		</div>
 	{:else if filePdfData !== null}
 		<PDFViewer bind:this={pdfViewerRef} data={filePdfData} className="w-full h-full" />
+	{:else if fileSqliteData !== null}
+		<SqliteView data={fileSqliteData} />
 	{:else if fileOfficeHtml !== null}
 		<div class="flex flex-col h-full">
 			<div class="office-preview overflow-auto flex-1 min-h-0">
@@ -337,7 +381,7 @@
 				title="HTML Preview"
 			/>
 		{:else if isMarkdown && !showRaw}
-			<div class="prose dark:prose-invert max-w-full text-sm p-3">
+			<div bind:this={markdownEl} class="prose dark:prose-invert max-w-full text-sm p-3">
 				{@html renderedHtml}
 			</div>
 		{:else if isCsv && !showRaw && csvRows.length > 0}
@@ -369,7 +413,7 @@
 			</div>
 		{:else if isNotebook && !showRaw && parsedNotebook}
 			<div class="overflow-auto h-full">
-				<NotebookView notebook={parsedNotebook} />
+				<NotebookView notebook={parsedNotebook} filePath={selectedFile ?? ''} {baseUrl} {apiKey} />
 			</div>
 		{:else if isJson && !showRaw && parsedJson !== undefined}
 			<div class="overflow-auto h-full">
@@ -575,6 +619,7 @@
 		line-height: 1.6;
 		border-radius: 0;
 		overflow-x: auto;
+		min-height: 100%;
 	}
 	.shiki-preview :global(pre.shiki code) {
 		counter-reset: line;
