@@ -438,11 +438,14 @@
 				} else if (type === 'chat:completion') {
 					chatCompletionEventHandler(data, message, event.chat_id);
 				} else if (type === 'chat:tasks:cancel') {
-					taskIds = null;
-					const responseMessage = history.messages[history.currentId];
-					// Set all response messages to done
-					for (const messageId of history.messages[responseMessage.parentId].childrenIds) {
-						history.messages[messageId].done = true;
+					if (event.message_id === history.currentId) {
+						taskIds = null;
+						// Set all response messages to done
+						for (const messageId of history.messages[message.parentId].childrenIds) {
+							history.messages[messageId].done = true;
+						}
+					} else {
+						message.done = true;
 					}
 				} else if (type === 'chat:message:delta' || type === 'message') {
 					message.content += data.content;
@@ -566,11 +569,20 @@
 		origin: string;
 		data: { type: string; text: string };
 	}) => {
-		if (event.origin !== window.origin) {
+		const isSameOrigin = event.origin === window.origin;
+		const type = event.data?.type;
+
+		// Prompt-related message types only submit text to the chat input —
+		// functionally equivalent to the user typing.  When same-origin is
+		// enabled they go through immediately.  When it is disabled (opaque
+		// origin) we show a confirmation dialog so the user stays in control.
+		const iframePromptTypes = ['input:prompt', 'input:prompt:submit', 'action:submit'];
+
+		if (!isSameOrigin && !iframePromptTypes.includes(type)) {
 			return;
 		}
 
-		if (event.data.type === 'action:submit') {
+		if (type === 'action:submit') {
 			console.debug(event.data.text);
 
 			if (prompt !== '') {
@@ -579,8 +591,7 @@
 			}
 		}
 
-		// Replace with your iframe's origin
-		if (event.data.type === 'input:prompt') {
+		if (type === 'input:prompt') {
 			console.debug(event.data.text);
 
 			const inputElement = document.getElementById('chat-input');
@@ -591,12 +602,26 @@
 			}
 		}
 
-		if (event.data.type === 'input:prompt:submit') {
+		if (type === 'input:prompt:submit') {
 			console.debug(event.data.text);
 
 			if (event.data.text !== '') {
-				await tick();
-				submitPrompt(event.data.text);
+				if (isSameOrigin) {
+					await tick();
+					submitPrompt(event.data.text);
+				} else {
+					// Cross-origin: ask user to confirm before submitting
+					eventConfirmationInput = false;
+					eventConfirmationTitle = $i18n.t('Confirm Prompt from Embed');
+					eventConfirmationMessage = event.data.text;
+					eventCallback = async (confirmed: boolean) => {
+						if (confirmed) {
+							await tick();
+							submitPrompt(event.data.text);
+						}
+					};
+					showEventConfirmation = true;
+				}
 			}
 		}
 	};
@@ -2629,12 +2654,8 @@
 			currentChatPage.set(1);
 			initNewChat();
 			await goto('/');
-			getChatList(localStorage.token, $currentChatPage).then((chats) => {
-				chats.set(chats);
-			});
-			getPinnedChatList(localStorage.token).then((pinnedChats) => {
-				pinnedChats.set(pinnedChats);
-			});
+			chats.set(await getChatList(localStorage.token, $currentChatPage));
+			pinnedChats.set(await getPinnedChatList(localStorage.token));
 			toast.success($i18n.t('Chat archived.'));
 		} catch (error) {
 			console.error('Error archiving chat:', error);

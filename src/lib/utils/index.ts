@@ -889,13 +889,19 @@ export const removeDetails = (content, types) => {
 			);
 		}
 		return segment;
-	});
+	}).trim();
 };
 
 export const removeAllDetails = (content) => {
+	// First pass: strip <details> blocks on the full string before code-fence
+	// splitting, so blocks whose body contains triple backticks are caught.
+	// (replaceOutsideCode splits on ``` fences, which breaks the <details>
+	// regex when the opening and closing tags land in different segments.)
+	content = content.replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '');
+	// Second pass: catch any remaining blocks that live outside code fences
 	return replaceOutsideCode(content, (segment) => {
 		return segment.replace(/<details[^>]*>.*?<\/details>/gis, '');
-	});
+	}).trim();
 };
 
 export const processDetails = (content) => {
@@ -1403,6 +1409,22 @@ export const slugify = (str: string): string => {
 			// 5. Convert to lowercase
 			.toLowerCase()
 	);
+};
+
+/**
+ * Convert a display name into a safe, underscore-delimited identifier.
+ * Strips emojis, accents, and any non-alphanumeric characters so the
+ * result is always accepted by backend validation.
+ *
+ * e.g. "My Tool 😄" → "my_tool"
+ */
+export const nameToId = (name: string): string => {
+	return name
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/[^\w]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.toLowerCase();
 };
 
 export const extractInputVariables = (text: string): Record<string, any> => {
