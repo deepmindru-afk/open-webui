@@ -799,6 +799,38 @@ def convert_to_responses_payload(payload: dict) -> dict:
                 system_content = '\n'.join(p.get('text', '') for p in content if p.get('type') == 'text')
             continue
 
+        # Handle assistant messages with tool_calls (from convert_output_to_messages)
+        if role == 'assistant' and msg.get('tool_calls'):
+            # Add text content as message if present
+            if content:
+                text = content if isinstance(content, str) else '\n'.join(
+                    p.get('text', '') for p in content if p.get('type') == 'text'
+                )
+                if text.strip():
+                    input_items.append({
+                        'type': 'message', 'role': 'assistant',
+                        'content': [{'type': 'output_text', 'text': text}],
+                    })
+            # Convert each tool_call to a function_call input item
+            for tool_call in msg['tool_calls']:
+                func = tool_call.get('function', {})
+                input_items.append({
+                    'type': 'function_call',
+                    'call_id': tool_call.get('id', ''),
+                    'name': func.get('name', ''),
+                    'arguments': func.get('arguments', '{}'),
+                })
+            continue
+
+        # Handle tool result messages
+        if role == 'tool':
+            input_items.append({
+                'type': 'function_call_output',
+                'call_id': msg.get('tool_call_id', ''),
+                'output': msg.get('content', ''),
+            })
+            continue
+
         # Convert content format
         text_type = 'output_text' if role == 'assistant' else 'input_text'
 
@@ -825,6 +857,9 @@ def convert_to_responses_payload(payload: dict) -> dict:
 
     if 'max_tokens' in responses_payload:
         responses_payload['max_output_tokens'] = responses_payload.pop('max_tokens')
+
+    if 'max_completion_tokens' in responses_payload:
+        responses_payload['max_output_tokens'] = responses_payload.pop('max_completion_tokens')
 
     # Remove Chat Completions-only parameters not supported by the Responses API
     for unsupported_key in (
@@ -864,11 +899,36 @@ def convert_to_responses_payload(payload: dict) -> dict:
 
 def convert_responses_result(response: dict) -> dict:
     """
-    Convert non-streaming Responses API result.
-    Just add done flag - pass through raw response, frontend handles output.
+    Convert non-streaming Responses API result to Chat Completions format.
+
+    Extracts text from message output items so all downstream consumers
+    (frontend tasks, get_content_from_response) work without modification.
     """
-    response['done'] = True
-    return response
+    output_items = response.get('output', [])
+
+    content = ''
+    for item in output_items:
+        if item.get('type') == 'message':
+            for part in item.get('content', []):
+                if part.get('type') == 'output_text':
+                    content += part.get('text', '')
+
+    return {
+        'id': response.get('id', ''),
+        'object': 'chat.completion',
+        'model': response.get('model', ''),
+        'choices': [
+            {
+                'index': 0,
+                'message': {
+                    'role': 'assistant',
+                    'content': content,
+                },
+                'finish_reason': 'stop',
+            }
+        ],
+        'usage': response.get('usage', {}),
+    }
 
 
 @router.post('/chat/completions')

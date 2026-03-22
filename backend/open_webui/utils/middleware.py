@@ -97,6 +97,7 @@ from open_webui.utils.misc import (
     convert_logit_bias_input_to_json,
     get_content_from_message,
     convert_output_to_messages,
+    strip_empty_content_blocks,
 )
 from open_webui.utils.tools import (
     get_tools,
@@ -2634,6 +2635,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             }
         )
 
+    # Strip empty text content blocks from multimodal messages
+    # to prevent errors from providers like Gemini and Claude
+    form_data['messages'] = strip_empty_content_blocks(form_data.get('messages', []))
+
     return form_data, metadata, events
 
 
@@ -2884,7 +2889,7 @@ async def background_tasks_handler(ctx):
                                 }
                             )
 
-                    if title == None and len(messages) == 2:
+                    if title == None and len(messages) == 2 and (not messages_map or len(messages_map) <= 2):
                         title = messages[0].get('content', user_message)
 
                         Chats.update_chat_title_by_id(metadata['chat_id'], title)
@@ -3360,6 +3365,10 @@ async def streaming_chat_response_handler(response, ctx):
                     output = []
 
             usage = None
+            prior_output = []
+
+            def full_output():
+                return prior_output + output if prior_output else output
 
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
             DETECT_REASONING_TAGS = reasoning_tags_param is not False
@@ -3394,6 +3403,7 @@ async def streaming_chat_response_handler(response, ctx):
                     nonlocal content
                     nonlocal usage
                     nonlocal output
+                    nonlocal prior_output
 
                     response_tool_calls = []
 
@@ -3465,19 +3475,25 @@ async def streaming_chat_response_handler(response, ctx):
                                     )
                                 # Check for Responses API events (type field starts with "response.")
                                 elif data.get('type', '').startswith('response.'):
+
                                     output, response_metadata = handle_responses_streaming_event(data, output)
 
                                     processed_data = {
-                                        'output': output,
-                                        'content': serialize_output(output),
+                                        'output': full_output(),
+                                        'content': serialize_output(full_output()),
                                     }
 
                                     # print(data)
                                     # print(processed_data)
 
-                                    # Merge any metadata (usage, done, etc.)
+                                    # Merge any metadata (usage, etc.)
+                                    # Strip 'done' — response.completed emits
+                                    # it but we may still need to execute tool
+                                    # calls. The outer middleware manages the
+                                    # actual completion signal.
                                     if response_metadata:
                                         processed_data.update(response_metadata)
+                                        processed_data.pop('done', None)
 
                                     await event_emitter(
                                         {
@@ -3819,13 +3835,13 @@ async def streaming_chat_response_handler(response, ctx):
                                                 metadata['chat_id'],
                                                 metadata['message_id'],
                                                 {
-                                                    'content': serialize_output(output),
-                                                    'output': output,
+                                                    'content': serialize_output(full_output()),
+                                                    'output': full_output(),
                                                 },
                                             )
                                         else:
                                             data = {
-                                                'content': serialize_output(output),
+                                                'content': serialize_output(full_output()),
                                             }
 
                                 if delta:
@@ -3882,6 +3898,32 @@ async def streaming_chat_response_handler(response, ctx):
                     if response_tool_calls:
                         tool_calls.append(_split_tool_calls(response_tool_calls))
 
+                    # Responses API path: extract function_call items from output
+                    if not response_tool_calls and output:
+                        # Collect call_ids that already have results
+                        handled_call_ids = {
+                            item.get('call_id')
+                            for item in output
+                            if item.get('type') == 'function_call_output'
+                        }
+                        responses_api_tool_calls = []
+                        for item in output:
+                            if (
+                                item.get('type') == 'function_call'
+                                and item.get('call_id') not in handled_call_ids
+                            ):
+                                arguments = item.get('arguments', '{}')
+                                responses_api_tool_calls.append({
+                                    'id': item.get('call_id', ''),
+                                    'index': len(responses_api_tool_calls),
+                                    'function': {
+                                        'name': item.get('name', ''),
+                                        'arguments': arguments if isinstance(arguments, str) else json.dumps(arguments),
+                                    },
+                                })
+                        if responses_api_tool_calls:
+                            tool_calls.append(_split_tool_calls(responses_api_tool_calls))
+
                     if response.background:
                         await response.background()
 
@@ -3913,26 +3955,32 @@ async def streaming_chat_response_handler(response, ctx):
                     response_tool_calls = tool_calls.pop(0)
 
                     # Append function_call items for each tool call
+                    # (Responses API already has them from streaming, so skip duplicates)
+                    existing_call_ids = {
+                        item.get('call_id') for item in output
+                        if item.get('type') == 'function_call'
+                    }
                     for tc in response_tool_calls:
                         call_id = tc.get('id', '')
-                        func = tc.get('function', {})
-                        output.append(
-                            {
-                                'type': 'function_call',
-                                'id': call_id or output_id('fc'),
-                                'call_id': call_id,
-                                'name': func.get('name', ''),
-                                'arguments': func.get('arguments', '{}'),
-                                'status': 'in_progress',
-                            }
-                        )
+                        if call_id not in existing_call_ids:
+                            func = tc.get('function', {})
+                            output.append(
+                                {
+                                    'type': 'function_call',
+                                    'id': call_id or output_id('fc'),
+                                    'call_id': call_id,
+                                    'name': func.get('name', ''),
+                                    'arguments': func.get('arguments', '{}'),
+                                    'status': 'in_progress',
+                                }
+                            )
 
                     await event_emitter(
                         {
                             'type': 'chat:completion',
                             'data': {
-                                'content': serialize_output(output),
-                                'output': output,
+                                'content': serialize_output(full_output()),
+                                'output': full_output(),
                             },
                         }
                     )
@@ -4188,7 +4236,17 @@ async def streaming_chat_response_handler(response, ctx):
                         )
 
                         if isinstance(res, StreamingResponse):
+                            # Save accumulated output and start fresh.
+                            # Responses API output_index values are relative
+                            # to the current response — a clean output list
+                            # keeps indices aligned. The display prefix
+                            # ensures the UI shows tool history during
+                            # streaming.
+                            prior_output = list(output)
+                            output = []
                             await stream_body_handler(res, new_form_data)
+                            output[:0] = prior_output
+                            prior_output = []
                         else:
                             break
                     except Exception as e:
