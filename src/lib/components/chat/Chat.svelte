@@ -643,11 +643,14 @@
 		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
 		audioQueue.set(audioQueueInstance);
 
-		// Reset direct terminal enabled states — selectedTerminalId starts null on every page load
-		if ($settings?.terminalServers?.some((s) => s.enabled)) {
+		// Restore direct terminal enabled states based on persisted selectedTerminalId
+		if ($settings?.terminalServers?.length) {
 			settings.set({
 				...$settings,
-				terminalServers: ($settings.terminalServers ?? []).map((s) => ({ ...s, enabled: false }))
+				terminalServers: ($settings.terminalServers ?? []).map((s) => ({
+					...s,
+					enabled: $selectedTerminalId !== null && s.url === $selectedTerminalId
+				}))
 			});
 		}
 
@@ -961,13 +964,12 @@
 			if (message?.role !== 'user' && message?.content) {
 				const {
 					codeBlocks: codeBlocks,
-					html: htmlContent,
-					css: cssContent,
-					js: jsContent
+					htmlGroups: htmlGroups
 				} = getCodeBlockContents(message.content);
 
-				if (htmlContent || cssContent || jsContent) {
-					const renderedContent = `
+				if (htmlGroups && htmlGroups.length > 0) {
+					htmlGroups.forEach((group) => {
+						const renderedContent = `
                         <!DOCTYPE html>
                         <html lang="en">
                         <head>
@@ -978,19 +980,20 @@
 									background-color: white; /* Ensure the iframe has a white background */
 								}
 
-								${cssContent}
+								${group.css}
 							</${''}style>
                         </head>
                         <body>
-                            ${htmlContent}
+                            ${group.html}
 
 							<${''}script>
-                            	${jsContent}
+                            	${group.js}
 							</${''}script>
                         </body>
                         </html>
                     `;
-					contents = [...contents, { type: 'iframe', content: renderedContent }];
+						contents = [...contents, { type: 'iframe', content: renderedContent }];
+					});
 				} else {
 					// Check for SVG content
 					for (const block of codeBlocks) {
@@ -2814,7 +2817,7 @@
 								</div>
 							</div>
 
-							<div class=" pb-2 z-10">
+							<div class=" pb-2 {dragged ? 'z-0' : 'z-10'}">
 								<MessageInput
 									bind:this={messageInput}
 									{history}
