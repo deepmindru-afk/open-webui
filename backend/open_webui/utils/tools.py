@@ -1,3 +1,4 @@
+import base64
 import inspect
 import logging
 import re
@@ -44,6 +45,7 @@ from open_webui.utils.access_control import has_access, has_connection_access
 from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
 from open_webui.env import (
     AIOHTTP_CLIENT_TIMEOUT,
+    AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER,
     AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA,
     AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
     ENABLE_FORWARD_USER_INFO_HEADERS,
@@ -1186,6 +1188,7 @@ async def get_tool_servers_data(servers: List[Dict[str, Any]]) -> List[Dict[str,
     return results
 
 
+
 async def execute_tool_server(
     url: str,
     headers: Dict[str, str],
@@ -1236,9 +1239,13 @@ async def execute_tool_server(
             if param_name in params:
                 if param_in == 'path':
                     path_params[param_name] = params[param_name]
-                elif param_in == 'query':
-                    if params[param_name] is not None:
-                        query_params[param_name] = params[param_name]
+                if param_in == 'query':
+                    value = params[param_name]
+                    # Skip empty values for optional params (LLMs sometimes
+                    # pass "" instead of omitting optional parameters).
+                    if value is None or (value == '' and not param.get('required')):
+                        continue
+                    query_params[param_name] = value
 
         final_url = f'{url.rstrip("/")}{route_path}'
         for key, value in path_params.items():
@@ -1253,7 +1260,7 @@ async def execute_tool_server(
                 body_params = params
 
         async with aiohttp.ClientSession(
-            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER)
         ) as session:
             request_method = getattr(session, http_method.lower())
 
@@ -1273,7 +1280,13 @@ async def execute_tool_server(
                     try:
                         response_data = await response.json()
                     except Exception:
-                        response_data = await response.text()
+                        content_type = response.headers.get('Content-Type', '').split(';')[0].strip()
+                        if content_type.startswith('text/') or not content_type:
+                            response_data = await response.text()
+                        else:
+                            raw = await response.read()
+                            b64 = base64.b64encode(raw).decode()
+                            response_data = f'data:{content_type};base64,{b64}'
 
                     response_headers = response.headers
                     return (response_data, response_headers)
@@ -1292,7 +1305,13 @@ async def execute_tool_server(
                     try:
                         response_data = await response.json()
                     except Exception:
-                        response_data = await response.text()
+                        content_type = response.headers.get('Content-Type', '').split(';')[0].strip()
+                        if content_type.startswith('text/') or not content_type:
+                            response_data = await response.text()
+                        else:
+                            raw = await response.read()
+                            b64 = base64.b64encode(raw).decode()
+                            response_data = f'data:{content_type};base64,{b64}'
 
                     response_headers = response.headers
                     return (response_data, response_headers)
