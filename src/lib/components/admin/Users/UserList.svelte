@@ -301,6 +301,7 @@
 					>
 						<div class="flex gap-1.5 items-center">
 							{$i18n.t('Last Active')}
+							<!-- {$i18n.t('Last Modified')} -->
 
 							{#if orderBy === 'last_active_at'}
 								<span class="font-normal"
