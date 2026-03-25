@@ -1177,6 +1177,15 @@
 				.filter((id) => id);
 		}
 
+		// Restore tool selection after OAuth redirect
+		const pendingToolId = sessionStorage.getItem('pendingOAuthToolId');
+		if (pendingToolId) {
+			sessionStorage.removeItem('pendingOAuthToolId');
+			if (!selectedToolIds.includes(pendingToolId)) {
+				selectedToolIds = [...selectedToolIds, pendingToolId];
+			}
+		}
+
 		if ($page.url.searchParams.get('call') === 'true') {
 			showCallOverlay.set(true);
 			showControls.set(true);
@@ -1999,9 +2008,6 @@
 				}
 			})
 		);
-
-		currentChatPage.set(1);
-		chats.set(await getChatList(localStorage.token, $currentChatPage));
 	};
 
 	const getFeatures = () => {
@@ -2597,8 +2603,6 @@
 					params: params,
 					files: chatFiles
 				});
-				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
 			}
 		}
 	};

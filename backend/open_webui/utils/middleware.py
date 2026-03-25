@@ -92,6 +92,7 @@ from open_webui.utils.misc import (
     get_last_user_message_item,
     get_last_assistant_message,
     get_system_message,
+    merge_system_messages,
     replace_system_message_content,
     prepend_to_first_user_message_content,
     convert_logit_bias_input_to_json,
@@ -1457,7 +1458,7 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
         response = res['choices'][0]['message']['content']
 
         try:
-            bracket_start = response.find('{')
+            bracket_start = response.rfind('{')
             bracket_end = response.rfind('}') + 1
 
             if bracket_start == -1 or bracket_end == -1:
@@ -1779,7 +1780,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
                 response = res['choices'][0]['message']['content']
 
                 try:
-                    bracket_start = response.find('{')
+                    bracket_start = response.rfind('{')
                     bracket_end = response.rfind('}') + 1
 
                     if bracket_start == -1 or bracket_end == -1:
@@ -1883,7 +1884,7 @@ async def chat_completion_files_handler(
                 queries_response = queries_response['choices'][0]['message']['content']
 
                 try:
-                    bracket_start = queries_response.find('{')
+                    bracket_start = queries_response.rfind('{')
                     bracket_end = queries_response.rfind('}') + 1
 
                     if bracket_start == -1 or bracket_end == -1:
@@ -2100,6 +2101,35 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # Pipeline Inlet -> Filter Inlet -> Chat Memory -> Chat Web Search -> Chat Image Generation
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
+
+    # Arena model resolution — pick the sub-model now so all downstream
+    # processing (knowledge, capabilities, tools, params) uses its settings
+    # instead of the empty arena wrapper.
+    if model.get('owned_by') == 'arena':
+        arena_model_ids = model.get('info', {}).get('meta', {}).get('model_ids')
+        arena_filter_mode = model.get('info', {}).get('meta', {}).get('filter_mode')
+        if arena_model_ids and arena_filter_mode == 'exclude':
+            arena_model_ids = [
+                available_model['id']
+                for available_model in request.app.state.MODELS.values()
+                if available_model.get('owned_by') != 'arena' and available_model['id'] not in arena_model_ids
+            ]
+
+        if isinstance(arena_model_ids, list) and arena_model_ids:
+            selected_model_id = random.choice(arena_model_ids)
+        else:
+            arena_model_ids = [
+                available_model['id']
+                for available_model in request.app.state.MODELS.values()
+                if available_model.get('owned_by') != 'arena'
+            ]
+            selected_model_id = random.choice(arena_model_ids)
+
+        selected_model = request.app.state.MODELS.get(selected_model_id)
+        if selected_model:
+            model = selected_model
+            form_data['model'] = selected_model_id
+            metadata['selected_model_id'] = selected_model_id
 
     form_data = apply_params_to_form_data(form_data, model)
     log.debug(f'form_data: {form_data}')
@@ -2696,6 +2726,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # to prevent errors from providers like Gemini and Claude
     form_data['messages'] = strip_empty_content_blocks(form_data.get('messages', []))
 
+    # Merge any duplicate system messages into a single message at position 0
+    # to prevent template parsing errors with strict chat templates (e.g. Qwen)
+    form_data['messages'] = merge_system_messages(form_data.get('messages', []))
+
     return form_data, metadata, events
 
 
@@ -3098,7 +3132,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                     )
 
                     # Send a webhook notification if the user is not active
-                    if not Users.is_user_active(user.id):
+                    if request.app.state.config.ENABLE_USER_WEBHOOKS and not Users.is_user_active(user.id):
                         webhook_url = Users.get_user_webhook_url_by_id(user.id)
                         if webhook_url:
                             await post_webhook(
@@ -3746,7 +3780,7 @@ async def streaming_chat_response_handler(response, ctx):
                                                 }
                                             ]
 
-                                        data = {'content': serialize_output(output)}
+                                        data = {'content': serialize_output(full_output())}
 
                                     if value:
                                         if (
@@ -4587,7 +4621,7 @@ async def streaming_chat_response_handler(response, ctx):
                     )
 
                 # Send a webhook notification if the user is not active
-                if not Users.is_user_active(user.id):
+                if request.app.state.config.ENABLE_USER_WEBHOOKS and not Users.is_user_active(user.id):
                     webhook_url = Users.get_user_webhook_url_by_id(user.id)
                     if webhook_url:
                         await post_webhook(
