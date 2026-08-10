@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 # Initialize device type args
 # use build args in the docker build command with --build-arg="BUILDARG=true"
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ARG NODE_OPTIONS="--max-old-space-size=4096"
 ARG USE_CUDA=false
 ARG USE_OLLAMA=false
 ARG USE_SLIM=false
@@ -39,7 +41,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --force
 
 COPY . .
-ENV NODE_OPTIONS="--max-old-space-size=4096"
 ENV APP_BUILD_HASH=${BUILD_HASH}
 RUN npm run build
 
