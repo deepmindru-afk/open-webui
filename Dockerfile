@@ -1,8 +1,6 @@
 # syntax=docker/dockerfile:1
 # Initialize device type args
 # use build args in the docker build command with --build-arg="BUILDARG=true"
-ENV NODE_OPTIONS="--max-old-space-size=4096"
-ARG NODE_OPTIONS="--max-old-space-size=4096"
 ARG USE_CUDA=false
 ARG USE_OLLAMA=false
 ARG USE_SLIM=false
@@ -27,6 +25,8 @@ ARG GID=0
 
 ######## WebUI frontend ########
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
+ENV NODE_OPTIONS="--max-old-space-size=8192"
+ARG NODE_OPTIONS="--max-old-space-size=8192"
 ARG BUILD_HASH
 
 # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
