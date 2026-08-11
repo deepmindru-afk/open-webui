@@ -101,8 +101,11 @@
 		mounted = nextOpen || mounted;
 
 		const finish = () => {
+			if (!nextOpen) {
+				mounted = false;
+			}
+
 			settling = false;
-			mounted = nextOpen;
 			settleTimer = null;
 		};
 
