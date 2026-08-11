@@ -74,6 +74,7 @@
 	let renderMarkdownInUserMessages = true;
 	let renderMarkdownInAssistantMessages = true;
 	let expandDetails = false;
+	let chatHoverPreview = true;
 	let renderMarkdownInPreviews = true;
 	let showChatTitleInTab = true;
 
@@ -287,6 +288,7 @@
 		renderMarkdownInUserMessages = currentSettings?.renderMarkdownInUserMessages ?? true;
 		renderMarkdownInAssistantMessages = currentSettings?.renderMarkdownInAssistantMessages ?? true;
 		expandDetails = currentSettings?.expandDetails ?? false;
+		chatHoverPreview = currentSettings?.chatHoverPreview ?? true;
 		renderMarkdownInPreviews = currentSettings?.renderMarkdownInPreviews ?? true;
 
 		landingPageMode = currentSettings?.landingPageMode ?? '';
@@ -904,6 +906,29 @@
 
 			<div>
 				<div class={settingRowClass}>
+					<div id="render-markdown-in-previews-label" class={settingLabelClass}>
+						{$i18n.t('Render Markdown in Previews')}
+					</div>
+
+					<div class={settingControlClass}>
+						<Switch
+							ariaLabelledbyId="render-markdown-in-previews-label"
+							tooltip={true}
+							bind:state={renderMarkdownInPreviews}
+							inherited={isDefaultSetting('renderMarkdownInPreviews')}
+							on:change={() => {
+								saveSettings({ renderMarkdownInPreviews });
+							}}
+						/>
+					</div>
+				</div>
+				<p class={settingDescriptionClass}>
+					{$i18n.t('Format Markdown in previews and compact content surfaces.')}
+				</p>
+			</div>
+
+			<div>
+				<div class={settingRowClass}>
 					<div id="auto-generation-label" class={settingLabelClass}>
 						{$i18n.t('Title Auto-Generation')}
 					</div>
@@ -1014,6 +1039,29 @@
 				</div>
 				<p class={settingDescriptionClass}>
 					{$i18n.t('Follow assistant responses as they are generated.')}
+				</p>
+			</div>
+
+			<div>
+				<div class={settingRowClass}>
+					<div id="scroll-on-branch-change-label" class={settingLabelClass}>
+						{$i18n.t('Scroll On Branch Change')}
+					</div>
+
+					<div class={settingControlClass}>
+						<Switch
+							ariaLabelledbyId="scroll-on-branch-change-label"
+							tooltip={true}
+							bind:state={scrollOnBranchChange}
+							inherited={isDefaultSetting('scrollOnBranchChange')}
+							on:change={() => {
+								saveSettings({ scrollOnBranchChange });
+							}}
+						/>
+					</div>
+				</div>
+				<p class={settingDescriptionClass}>
+					{$i18n.t('Scroll to the active branch when switching response branches.')}
 				</p>
 			</div>
 
@@ -1157,24 +1205,26 @@
 
 			<div>
 				<div class={settingRowClass}>
-					<div id="render-markdown-in-previews-label" class={settingLabelClass}>
-						{$i18n.t('Render Markdown in Previews')}
+					<div id="chat-hover-preview-label" class={settingLabelClass}>
+						{$i18n.t('Chat Hover Previews')}
 					</div>
 
 					<div class={settingControlClass}>
 						<Switch
-							ariaLabelledbyId="render-markdown-in-previews-label"
+							ariaLabelledbyId="chat-hover-preview-label"
 							tooltip={true}
-							bind:state={renderMarkdownInPreviews}
-							inherited={isDefaultSetting('renderMarkdownInPreviews')}
+							bind:state={chatHoverPreview}
+							inherited={isDefaultSetting('chatHoverPreview')}
 							on:change={() => {
-								saveSettings({ renderMarkdownInPreviews });
+								saveSettings({ chatHoverPreview });
 							}}
 						/>
 					</div>
 				</div>
 				<p class={settingDescriptionClass}>
-					{$i18n.t('Format Markdown in previews and compact content surfaces.')}
+					{$i18n.t(
+						'Show a floating preview of recent messages when hovering a chat in the sidebar.'
+					)}
 				</p>
 			</div>
 
@@ -1198,29 +1248,6 @@
 				</div>
 				<p class={settingDescriptionClass}>
 					{$i18n.t('Group multi-model responses into tabs.')}
-				</p>
-			</div>
-
-			<div>
-				<div class={settingRowClass}>
-					<div id="scroll-on-branch-change-label" class={settingLabelClass}>
-						{$i18n.t('Scroll On Branch Change')}
-					</div>
-
-					<div class={settingControlClass}>
-						<Switch
-							ariaLabelledbyId="scroll-on-branch-change-label"
-							tooltip={true}
-							bind:state={scrollOnBranchChange}
-							inherited={isDefaultSetting('scrollOnBranchChange')}
-							on:change={() => {
-								saveSettings({ scrollOnBranchChange });
-							}}
-						/>
-					</div>
-				</div>
-				<p class={settingDescriptionClass}>
-					{$i18n.t('Scroll to the active branch when switching response branches.')}
 				</p>
 			</div>
 
