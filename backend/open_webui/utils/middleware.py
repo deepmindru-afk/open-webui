@@ -79,6 +79,7 @@ from open_webui.socket.main import (
 from open_webui.utils.access_control import has_connection_access, has_permission
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
 from open_webui.utils.access_control.folders import has_folder_access
+from open_webui.utils.ask_user import stage_ask_user_tool_call
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.code_interpreter import execute_code_jupyter
@@ -2054,8 +2055,9 @@ def process_messages_with_output(
                 processed.extend(output_messages)
                 continue
 
-        # Strip 'output' field before adding (LLM shouldn't see it)
-        clean_message = {k: v for k, v in message.items() if k != 'output'}
+        clean_message = dict(message)
+        for key in ('id', 'files', 'output', 'contextSummary', 'context_summary', 'usage'):
+            clean_message.pop(key, None)
         processed.append(clean_message)
 
     return processed
@@ -2065,10 +2067,8 @@ def strip_compaction_fields(messages: list[dict]) -> list[dict]:
     stripped = []
     for message in messages:
         clean = dict(message)
-        clean.pop('contextSummary', None)
-        clean.pop('context_summary', None)
-        clean.pop('usage', None)
-        clean.pop('id', None)
+        for key in ('id', 'files', 'output', 'contextSummary', 'context_summary', 'usage'):
+            clean.pop(key, None)
         stripped.append(clean)
     return stripped
 
@@ -3114,6 +3114,12 @@ async def drain_approved_tool_calls(request, form_data, user, model, metadata) -
     event_emitter, event_caller = await get_event_emitter_and_caller(metadata)
     changed = False
     for item in approved_calls:
+        if item.get('name') == 'ask_user':
+            item['status'] = 'pending'
+            item.pop('approved', None)
+            changed = True
+            continue
+
         tool_call = {
             'id': item.get('call_id', ''),
             'type': 'function',
@@ -5094,11 +5100,12 @@ async def streaming_chat_response_handler(response, ctx):
                         }
                         responses_api_tool_calls = []
                         for item in output:
-                            if item.get('type') == 'function_call' and item.get('call_id') not in handled_call_ids:
+                            call_id = item.get('call_id') or item.get('id') or output_id('fc')
+                            if item.get('type') == 'function_call' and call_id not in handled_call_ids:
                                 arguments = item.get('arguments', '{}')
                                 responses_api_tool_calls.append(
                                     {
-                                        'id': item.get('call_id', ''),
+                                        'id': call_id,
                                         'index': len(responses_api_tool_calls),
                                         'function': {
                                             'name': item.get('name', ''),
@@ -5148,6 +5155,22 @@ async def streaming_chat_response_handler(response, ctx):
                     tool_call_iterations += 1
 
                     response_tool_calls = tool_calls.pop(0)
+                    ask_user_stage = stage_ask_user_tool_call(response_tool_calls, output, output_id)
+                    if ask_user_stage:
+                        if ask_user_stage['error']:
+                            await event_emitter({'type': 'chat:completion', 'data': {'output': full_output()}})
+                            continue
+
+                        if is_saved_chat_id(metadata.get('chat_id')) and metadata.get('message_id'):
+                            await pause_for_tool_approval(
+                                metadata['chat_id'],
+                                metadata['message_id'],
+                                full_output(),
+                                form_data,
+                                metadata,
+                            )
+                        await event_emitter({'type': 'chat:completion', 'data': {'output': full_output()}})
+                        return
 
                     # Append function_call items for each tool call
                     # (Responses API already has them from streaming, so skip duplicates)
@@ -5176,7 +5199,7 @@ async def streaming_chat_response_handler(response, ctx):
                         await pause_for_tool_approval(
                             metadata['chat_id'],
                             metadata['message_id'],
-                            output,
+                            full_output(),
                             form_data,
                             metadata,
                         )
@@ -5455,7 +5478,7 @@ async def streaming_chat_response_handler(response, ctx):
                     # output sent to the frontend — they're only for LLM consumption
                     # via convert_output_to_messages.
                     frontend_output = []
-                    for item in output:
+                    for item in full_output():
                         if item.get('type') == 'function_call_output':
                             parts = item.get('output', [])
                             if any(p.get('type') == 'input_image' for p in parts):
@@ -5541,7 +5564,7 @@ async def streaming_chat_response_handler(response, ctx):
                             # keeps indices aligned. The display prefix
                             # ensures the UI shows tool history during
                             # streaming.
-                            prior_output = list(output)
+                            prior_output = list(full_output())
                             # Trim the trailing empty placeholder message
                             # so it doesn't persist as a ghost item once
                             # the new stream produces real content.
