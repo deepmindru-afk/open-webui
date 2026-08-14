@@ -83,7 +83,12 @@
 	} from '$lib/apis/chats';
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
 	import { processUrl, processWebSearch } from '$lib/apis/retrieval';
-	import { getAndUpdateUserLocation, getUserInfoById, getUserSettings } from '$lib/apis/users';
+	import {
+		getAndUpdateUserLocation,
+		getUserInfoById,
+		getUserSettings,
+		updateUserSettings
+	} from '$lib/apis/users';
 	import {
 		generateQueries,
 		chatAction,
@@ -415,13 +420,28 @@
 	let loadedChatIdProp = '';
 	let currentDraftKey = '';
 
-	$: toolApprovalMode = params?.tool_approval_mode === 'ask' ? 'ask' : 'full';
+	$: toolApprovalMode =
+		(params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode) === 'ask'
+			? 'ask'
+			: 'full';
 
-	const handleToolApprovalModeChange = (mode) => {
+	const handleToolApprovalModeChange = async (mode) => {
+		const tool_approval_mode = mode === 'ask' ? 'ask' : 'full';
 		params = {
 			...params,
-			tool_approval_mode: mode === 'ask' ? 'ask' : 'full'
+			tool_approval_mode
 		};
+
+		settings.set({
+			...$settings,
+			params: {
+				...($settings?.params ?? {}),
+				tool_approval_mode
+			}
+		});
+		await updateUserSettings(localStorage.token, { ui: $settings }).catch((err) => {
+			console.error('[tool permissions settings]', err);
+		});
 	};
 
 	const parseToolArguments = (args) => {
@@ -482,13 +502,21 @@
 			return;
 		}
 
-		await resolveChatMessageToolCall(localStorage.token, $chatId, messageId, callId, 'answer', {
-			answers,
-			timed_out: timedOut
-		}).catch(async (error) => {
+		const res = await resolveChatMessageToolCall(
+			localStorage.token,
+			$chatId,
+			messageId,
+			callId,
+			'answer',
+			{
+				answers,
+				timed_out: timedOut
+			}
+		).catch(async (error) => {
 			toast.error(`${error}`);
 			await loadChat();
 		});
+		onToolCallResolved(res);
 	};
 
 	const rejectPendingAskUser = async (messageId, callId) => {
@@ -496,7 +524,7 @@
 			return;
 		}
 
-		await resolveChatMessageToolCall(
+		const res = await resolveChatMessageToolCall(
 			localStorage.token,
 			$chatId,
 			messageId,
@@ -506,6 +534,7 @@
 			toast.error(`${error}`);
 			await loadChat();
 		});
+		onToolCallResolved(res);
 	};
 
 	$: pendingAskUser = findPendingAskUser(history);
@@ -635,6 +664,13 @@
 				}
 			);
 			if (res) chat = res;
+		}
+	};
+
+	const onToolCallResolved = (res) => {
+		const newTaskIds = res?.task_ids ?? (res?.task_id ? [res.task_id] : []);
+		if (newTaskIds.length > 0) {
+			taskIds = [...(taskIds ?? []), ...newTaskIds];
 		}
 	};
 
@@ -3548,10 +3584,7 @@
 				await handleOpenAIError(res.error, responseMessage);
 			} else {
 				// Backend returns task_ids (multi-model) or task_id (single model)
-				const newTaskIds = res.task_ids ?? (res.task_id ? [res.task_id] : []);
-				if (newTaskIds.length > 0) {
-					taskIds = [...(taskIds ?? []), ...newTaskIds];
-				}
+				onToolCallResolved(res);
 
 				// Backend returns chat_id for new chats — set store + URL.
 				// Only update if the user hasn't navigated to a different chat
@@ -4267,6 +4300,7 @@
 										{mergeResponses}
 										{chatActionHandler}
 										{addMessages}
+										{onToolCallResolved}
 										allowDelete={!(generating || taskIds?.length)}
 										forkHandler={handleForkChat}
 										topPadding={!embedded}

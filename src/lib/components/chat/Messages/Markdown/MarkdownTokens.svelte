@@ -54,6 +54,7 @@
 
 	export let onTaskClick: Function = () => {};
 	export let onSourceClick: Function = () => {};
+	export let onToolCallResolved: Function = () => {};
 
 	const headerComponent = (depth: number) => {
 		return 'h' + depth;
@@ -111,13 +112,14 @@
 
 		resolvingCallId = callId;
 		try {
-			await resolveChatMessageToolCall(
+			const res = await resolveChatMessageToolCall(
 				localStorage.token,
 				chatId,
 				messageId,
 				callId,
 				approved ? 'approve' : 'reject'
 			);
+			onToolCallResolved(res);
 		} catch (err) {
 			toast.error(String(err));
 		} finally {
@@ -317,6 +319,7 @@
 					{onTaskClick}
 					{sourceIds}
 					{onSourceClick}
+					{onToolCallResolved}
 				/>
 			</blockquote>
 		{/if}
