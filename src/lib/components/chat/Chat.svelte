@@ -162,7 +162,11 @@
 	let eventConfirmationInputValue = '';
 	let eventConfirmationInputType = '';
 	let eventConfirmationInputOptions: ({ label?: string; value: string } | string)[] = [];
-	let eventCallback = null;
+	let eventCallback: (value: any) => void = () => {};
+	let showAskUserDialog = false;
+	let askUserQuestions: any[] = [];
+	let askUserAllowOther = true;
+	let askUserTimeoutMs: number | null = null;
 
 	let selectedModels = [''];
 	let atSelectedModel: Model | undefined;
@@ -1144,6 +1148,13 @@
 					eventConfirmationInputValue = data?.value ?? '';
 					eventConfirmationInputType = data?.input?.type ?? data?.type ?? '';
 					eventConfirmationInputOptions = data?.input?.options ?? data?.options ?? [];
+				} else if (type === 'request:user_input') {
+					eventCallback = cb;
+					askUserQuestions = data?.questions ?? [];
+					askUserAllowOther = data?.allow_other ?? true;
+					askUserTimeoutMs =
+						typeof data?.timeout_ms === 'number' && data.timeout_ms > 0 ? data.timeout_ms : null;
+					showAskUserDialog = true;
 				} else if (type.startsWith('terminal:')) {
 					terminalEventHandler(type, data);
 				} else {
@@ -1600,7 +1611,9 @@
 						fileItem.content_type = uploadedFile.meta?.content_type;
 						fileItem.size = uploadedFile.meta?.size;
 						fileItem.collection_name =
-							res.collection_name ?? uploadedFile.meta?.collection_name ?? uploadedFile.collection_name;
+							res.collection_name ??
+							uploadedFile.meta?.collection_name ??
+							uploadedFile.collection_name;
 					} else {
 						fileItem.type = 'text';
 						fileItem.file = {
@@ -2249,9 +2262,7 @@
 
 			chatRequestQueues.update((q) => ({
 				...q,
-				[targetChatId]: (q[targetChatId] ?? []).filter(
-					(m) => !queuedMessageIds.has(m.id)
-				)
+				[targetChatId]: (q[targetChatId] ?? []).filter((m) => !queuedMessageIds.has(m.id))
 			}));
 
 			await submitPrompt(combinedPrompt, combinedFiles);
@@ -4165,6 +4176,20 @@
 										{onUpdate}
 										messageQueue={$chatRequestQueues[$chatId] ?? []}
 										{chatTasks}
+										askUser={{
+											show: showAskUserDialog,
+											questions: askUserQuestions,
+											allowOther: askUserAllowOther,
+											timeoutMs: askUserTimeoutMs,
+											onConfirm: (value) => {
+												showAskUserDialog = false;
+												eventCallback(value);
+											},
+											onCancel: () => {
+												showAskUserDialog = false;
+												eventCallback({ status: 'cancelled', answers: {} });
+											}
+										}}
 										onQueueSendNow={sendQueuedMessageNow}
 										onQueueEdit={editQueuedMessage}
 										onQueueDelete={deleteQueuedMessage}
@@ -4219,10 +4244,7 @@
 										</div>
 									</div>
 								{/if}
-								<div
-									id={embedded ? messageInputDropzoneId : undefined}
-									class="pb-2 z-10"
-								>
+								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
 										bind:this={messageInput}
 										{history}
@@ -4257,6 +4279,20 @@
 										{onUpdate}
 										messageQueue={$chatRequestQueues[$chatId] ?? []}
 										{chatTasks}
+										askUser={{
+											show: showAskUserDialog,
+											questions: askUserQuestions,
+											allowOther: askUserAllowOther,
+											timeoutMs: askUserTimeoutMs,
+											onConfirm: (value) => {
+												showAskUserDialog = false;
+												eventCallback(value);
+											},
+											onCancel: () => {
+												showAskUserDialog = false;
+												eventCallback({ status: 'cancelled', answers: {} });
+											}
+										}}
 										onQueueSendNow={sendQueuedMessageNow}
 										onQueueEdit={editQueuedMessage}
 										onQueueDelete={deleteQueuedMessage}

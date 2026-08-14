@@ -104,6 +104,7 @@
 	import Knobs from '../icons/Knobs.svelte';
 	import ValvesModal from '../workspace/common/ValvesModal.svelte';
 	import Note from '../icons/Note.svelte';
+	import AskUserCard from './AskUserCard.svelte';
 	import { goto } from '$app/navigation';
 	import InputModal from '../common/InputModal.svelte';
 	import Expand from '../icons/Expand.svelte';
@@ -111,6 +112,15 @@
 	import TaskList from './Messages/ResponseMessage/TaskList.svelte';
 
 	const i18n = getContext('i18n');
+
+	type AskUserPrompt = {
+		show: boolean;
+		questions: any[];
+		allowOther: boolean;
+		timeoutMs: number | null;
+		onConfirm: (value: any) => void;
+		onCancel: () => void;
+	};
 
 	export let onUpload: Function = (e) => {};
 	export let onChange: Function = () => {};
@@ -170,6 +180,14 @@
 	export let onQueueEdit: (id: string) => void = () => {};
 	export let onQueueDelete: (id: string) => void = () => {};
 	export let onUpdate: (data?: { file?: any }) => void = () => {};
+	export let askUser: AskUserPrompt = {
+		show: false,
+		questions: [],
+		allowOther: true,
+		timeoutMs: null,
+		onConfirm: (_value: any) => {},
+		onCancel: () => {}
+	};
 
 	export let chatTasks = [];
 
@@ -1579,6 +1597,23 @@
 							class="hidden"
 							on:click={() => createMessagePair(prompt)}
 						/>
+
+						{#if askUser?.show}
+							<div class="mx-1">
+								<AskUserCard
+									show={askUser.show}
+									questions={askUser.questions}
+									allowOther={askUser.allowOther}
+									timeoutMs={askUser.timeoutMs}
+									on:confirm={(e) => {
+										askUser.onConfirm(e.detail);
+									}}
+									on:cancel={() => {
+										askUser.onCancel();
+									}}
+								/>
+							</div>
+						{/if}
 
 						<!-- Task list display -->
 						{#if isActive && chatTasks.length > 0}
