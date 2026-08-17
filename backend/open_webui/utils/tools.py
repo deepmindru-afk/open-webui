@@ -443,7 +443,7 @@ async def get_tools(request: Request, tool_ids: list[str], user: UserModel, extr
                         )
                         headers.setdefault('Content-Type', 'application/json')
 
-                        async def make_tool_function(function_name, tool_server_data, headers):
+                        async def make_tool_function(function_name, tool_server_data, headers, cookies):
                             async def tool_function(**kwargs):
                                 return await execute_tool_server(
                                     url=tool_server_data['url'],
@@ -456,7 +456,7 @@ async def get_tools(request: Request, tool_ids: list[str], user: UserModel, extr
 
                             return tool_function
 
-                        tool_function = await make_tool_function(function_name, tool_server_data, headers)
+                        tool_function = await make_tool_function(function_name, tool_server_data, headers, cookies)
 
                         callable = await get_async_tool_function_and_apply_extra_params(
                             tool_function,
@@ -1170,15 +1170,17 @@ async def set_tool_servers(request: Request):
 
 async def get_tool_servers(request: Request):
     try:
-        tool_servers = []
+        tool_servers = None
         if request.app.state.redis is not None:
             try:
-                tool_servers = JSONCodec.loads(await request.app.state.redis.get(f'{REDIS_KEY_PREFIX}:tool_servers'))
-                request.app.state.TOOL_SERVERS = tool_servers
+                data = await request.app.state.redis.get(f'{REDIS_KEY_PREFIX}:tool_servers')
+                if data is not None:
+                    tool_servers = JSONCodec.loads(data)
+                    request.app.state.TOOL_SERVERS = tool_servers
             except Exception as e:
                 log.error(f'Error fetching tool_servers from Redis: {e}')
 
-        if not tool_servers:
+        if tool_servers is None:
             tool_servers = await set_tool_servers(request)
 
         return tool_servers
@@ -1313,15 +1315,17 @@ async def set_terminal_servers(request: Request):
 
 async def get_terminal_servers(request: Request):
     """Return cached terminal server specs, loading if needed."""
-    terminal_servers = []
+    terminal_servers = None
     if request.app.state.redis is not None:
         try:
-            terminal_servers = JSONCodec.loads(await request.app.state.redis.get(f'{REDIS_KEY_PREFIX}:terminal_servers'))
-            request.app.state.TERMINAL_SERVERS = terminal_servers
+            data = await request.app.state.redis.get(f'{REDIS_KEY_PREFIX}:terminal_servers')
+            if data is not None:
+                terminal_servers = JSONCodec.loads(data)
+                request.app.state.TERMINAL_SERVERS = terminal_servers
         except Exception as e:
             log.error(f'Error fetching terminal_servers from Redis: {e}')
 
-    if not terminal_servers:
+    if terminal_servers is None:
         terminal_servers = await set_terminal_servers(request)
 
     return terminal_servers
