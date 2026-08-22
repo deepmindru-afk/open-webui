@@ -35,6 +35,7 @@
 		user as _user,
 		showControls,
 		showSettings,
+		showFileNavDir,
 		selectedTerminalId,
 		TTSWorker,
 		temporaryChatEnabled
@@ -875,10 +876,7 @@
 
 		return (
 			(settingsValue?.terminalServers ?? []).find(
-				(t: any) =>
-					t.url === selectedId &&
-					t.enabled &&
-					t.config?.chat_uploads === 'filesystem'
+				(t: any) => t.url === selectedId && t.enabled && t.config?.chat_uploads === 'filesystem'
 			) ?? null
 		);
 	};
@@ -924,11 +922,13 @@
 		if (filesystemUploadTerminal) {
 			try {
 				const cwd =
-					(await getCwd(
-						filesystemUploadTerminal.url,
-						filesystemUploadTerminal.key,
-						chatId || undefined
-					))?.cwd || '/';
+					(
+						await getCwd(
+							filesystemUploadTerminal.url,
+							filesystemUploadTerminal.key,
+							chatId || undefined
+						)
+					)?.cwd || '/';
 				const uploadedFile = await uploadToTerminal(
 					filesystemUploadTerminal.url,
 					filesystemUploadTerminal.key,
@@ -938,7 +938,7 @@
 				);
 
 				if (uploadedFile) {
-					fileItem.type = 'terminal_file';
+					fileItem.type = 'filesystem';
 					fileItem.status = 'uploaded';
 					fileItem.id = uploadedFile.path;
 					fileItem.path = uploadedFile.path;
@@ -946,6 +946,7 @@
 					fileItem.size = uploadedFile.size ?? file.size;
 					fileItem.file = uploadedFile;
 					files = files;
+					showFileNavDir.set(uploadedFile.path);
 				} else {
 					fileItem.status = 'error';
 					fileItem.error = $i18n.t('Failed to upload file.');
@@ -1355,6 +1356,26 @@
 								...files,
 								{
 									...data,
+									status: 'processed'
+								}
+							];
+						} else if (type === 'filesystem') {
+							const path = data.path ?? data.url ?? data.id;
+							if (
+								!path ||
+								files.find((f) => f.type === 'filesystem' && (f.path ?? f.url ?? f.id) === path)
+							) {
+								return;
+							}
+							files = [
+								...files,
+								{
+									type: 'filesystem',
+									id: path,
+									path,
+									url: path,
+									name: data.name,
+									size: data.size,
 									status: 'processed'
 								}
 							];
