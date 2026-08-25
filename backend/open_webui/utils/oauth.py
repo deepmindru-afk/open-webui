@@ -18,7 +18,7 @@ import jwt
 from authlib.integrations.starlette_client import OAuth
 from authlib.oauth2.rfc6749.errors import OAuth2Error
 from authlib.oidc.core import UserInfo
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import (
     HTTPException,
     status,
@@ -275,12 +275,8 @@ def encrypt_data(data) -> str:
 
 def decrypt_data(data: str):
     """Decrypt data from storage"""
-    try:
-        decrypted = FERNET.decrypt(data.encode()).decode()
-        return JSONCodec.loads(decrypted)
-    except Exception as e:
-        log.error(f'Error decrypting data: {e}')
-        raise
+    decrypted = FERNET.decrypt(data.encode()).decode()
+    return JSONCodec.loads(decrypted)
 
 
 def _build_oauth_callback_error_message(e: Exception) -> str:
@@ -909,8 +905,19 @@ class OAuthClientManager:
                 oauth_client_info = await recover_static_oauth_client_metadata(connection, oauth_client_info)
                 oauth_client_info = apply_connection_oauth_options(connection, oauth_client_info)
                 return self.add_client(expected_client_id, OAuthClientInformationFull(**oauth_client_info))['client']
+            except InvalidToken:
+                log.error(
+                    'Failed to lazily add OAuth client %s from config: InvalidToken. '
+                    'Stored OAuth client data is invalid; reconnect this tool server.',
+                    expected_client_id,
+                )
+                continue
             except Exception as e:
-                log.error(f'Failed to lazily add OAuth client {expected_client_id} from config: {e}')
+                log.error(
+                    'Failed to lazily add OAuth client %s from config: %s',
+                    expected_client_id,
+                    f'{type(e).__name__}: {e}' if str(e) else type(e).__name__,
+                )
                 continue
 
         return None
@@ -1922,6 +1929,7 @@ class OAuthManager:
             if not sub:
                 log.warning(f'OAuth callback failed, sub is missing: {user_data}')
                 raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
+            sub = str(sub)
 
             oauth_data = {}
             oauth_data[provider] = {
@@ -1986,7 +1994,13 @@ class OAuthManager:
                     user = await Users.get_user_by_email(email, db=db)
                     if user:
                         # Update the user with the new oauth sub
-                        await Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
+                        user = await Users.update_user_oauth_by_id(user.id, provider, sub, db=db) or user
+
+            if user:
+                provider_oauth = (user.oauth or {}).get(provider) if isinstance(user.oauth, dict) else None
+                # Lazy repair for legacy rows that stored numeric provider ids as JSON numbers.
+                if isinstance(provider_oauth, dict) and provider_oauth.get('sub') != sub:
+                    user = await Users.update_user_oauth_by_id(user.id, provider, sub, db=db) or user
 
             if user:
                 user = await self.update_user_role_from_oauth(
@@ -2370,7 +2384,7 @@ class OAuthManager:
         # 8. Identify users to log out
         users_to_logout = []
         if sub:
-            user = await Users.get_user_by_oauth_sub(matched_provider, sub, db=db)
+            user = await Users.get_user_by_oauth_sub(matched_provider, str(sub), db=db)
             if user:
                 users_to_logout.append(user)
 

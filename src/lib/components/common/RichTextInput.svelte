@@ -125,6 +125,11 @@
 		}
 	});
 
+	turndownService.addRule('underline', {
+		filter: 'u',
+		replacement: (content) => `<u>${content}</u>`
+	});
+
 	import { onMount, onDestroy, tick, getContext } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
 
@@ -760,7 +765,7 @@
 			}
 		}
 
-		if (collaboration && documentId && socket && user) {
+		if (collaboration && editable && documentId && socket && user) {
 			const { SocketIOCollaborationProvider } = await import('./RichTextInput/Collaboration');
 			provider = new SocketIOCollaborationProvider(documentId, socket, user, content);
 		}
@@ -904,7 +909,7 @@
 					: []),
 				...(collaboration && provider ? [provider.getEditorExtension()] : [])
 			],
-			content: collaboration ? undefined : content,
+			content: provider ? undefined : content,
 			autofocus: messageInput ? true : false,
 			onTransaction: () => {
 				if (!editor) return;

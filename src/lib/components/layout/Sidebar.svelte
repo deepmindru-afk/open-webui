@@ -306,10 +306,6 @@
 		folders = folderMap;
 	};
 
-	const initSharedFolders = async () => {
-		await initFolders();
-	};
-
 	const createFolder = async ({ name, data, parent_id }) => {
 		name = name?.trim();
 		if (!name) {
@@ -382,8 +378,6 @@
 		allChatsLoaded = false;
 		chatListReady = false;
 
-		initFolders();
-		initSharedFolders();
 		await Promise.all([
 			(async () => {
 				console.log('Init tags');
@@ -1433,6 +1427,10 @@
 
 								if (chat) {
 									console.log(chat);
+									if (!chat.folder_id && !chat.pinned) {
+										return;
+									}
+
 									if (chat.folder_id) {
 										const res = await updateChatFolderIdById(
 											localStorage.token,

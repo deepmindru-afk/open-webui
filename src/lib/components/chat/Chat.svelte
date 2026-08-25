@@ -1139,7 +1139,7 @@
 	const terminalEventHandler = (type: string, data: any) => {
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
-			displayFileHandler(data.path, { showControls, showFileNavPath });
+			displayFileHandler(data.path, { showControls, showFileNavPath }, { page: data?.page });
 		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
 			if (!data?.path) return;
 			showFileNavDir.set(data.path);
@@ -1989,6 +1989,13 @@
 	// Web functions
 	//////////////////////////
 
+	const openCallOverlay = () => {
+		setTimeout(() => {
+			showCallOverlay.set(true);
+			showControls.set(true);
+		}, 0);
+	};
+
 	const initNewChat = async () => {
 		console.log('initNewChat');
 		resetWebSearchConfirmation();
@@ -2176,8 +2183,7 @@
 		}
 
 		if ($page.url.searchParams.get('call') === 'true') {
-			showCallOverlay.set(true);
-			showControls.set(true);
+			openCallOverlay();
 		}
 
 		// Consume one-shot desktop event (e.g. Spotlight query, call shortcut)
@@ -2186,13 +2192,7 @@
 			desktopEvent.set(null);
 
 			if (event.type === 'call') {
-				// Defer to next macrotask so the call overlay isn't clobbered by
-				// showControlsSubscribe's initial callback (value=false → set(false))
-				// which runs as a pending microtask after this function.
-				setTimeout(() => {
-					showCallOverlay.set(true);
-					showControls.set(true);
-				}, 0);
+				openCallOverlay();
 			} else if (event.type === 'query') {
 				const query = event.data?.query;
 				const eventFiles = event.data?.files;
