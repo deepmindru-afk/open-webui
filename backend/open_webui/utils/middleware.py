@@ -111,6 +111,7 @@ from open_webui.utils.misc import (
     get_last_user_message_item,
     get_message_list,
     get_output_text,
+    get_response_error_detail,
     get_reasoning_details,
     get_system_message,
     is_string_allowed,
@@ -2157,10 +2158,13 @@ async def convert_url_images_to_base64(form_data, user=None):
     return form_data
 
 
+MESSAGE_REPLAY_KEYS = ('id', 'role', 'content', 'output', 'files', 'contextSummary', 'usage', 'model')
+
+
 async def load_messages_from_db(chat_id: str, message_id: str) -> Optional[list[dict]]:
     """
     Load the message chain from DB up to message_id,
-    keeping only LLM-relevant fields (role, content, output).
+    keeping only fields needed to rebuild the LLM payload.
     """
     messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
     if not messages_map:
@@ -2170,10 +2174,7 @@ async def load_messages_from_db(chat_id: str, message_id: str) -> Optional[list[
     if not db_messages:
         return None
 
-    return [
-        {k: v for k, v in msg.items() if k in ('id', 'role', 'content', 'output', 'files', 'contextSummary', 'usage')}
-        for msg in db_messages
-    ]
+    return [{k: v for k, v in msg.items() if k in MESSAGE_REPLAY_KEYS} for msg in db_messages]
 
 
 def get_reasoning_format(model: dict) -> str | None:
@@ -2192,6 +2193,13 @@ def get_reasoning_format(model: dict) -> str | None:
     if provider == 'llama.cpp':
         return 'reasoning_content'
     return None
+
+
+def strip_reasoning_details(output: list) -> list:
+    return [
+        {key: value for key, value in item.items() if key != 'reasoning_details'} if isinstance(item, dict) else item
+        for item in output
+    ]
 
 
 def process_messages_with_output(
@@ -2220,7 +2228,7 @@ def process_messages_with_output(
                 continue
 
         clean_message = dict(message)
-        for key in ('id', 'files', 'output', 'contextSummary', 'context_summary', 'usage'):
+        for key in ('id', 'files', 'output', 'model', 'contextSummary', 'context_summary', 'usage'):
             clean_message.pop(key, None)
         processed.append(clean_message)
 
@@ -2416,13 +2424,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if assistant_message_id:
                 assistant_message = await Chats.get_message_by_id_and_message_id(chat_id, assistant_message_id)
                 if assistant_message and (assistant_message.get('content') or assistant_message.get('output')):
-                    db_messages.append(
-                        {
-                            k: v
-                            for k, v in assistant_message.items()
-                            if k in ('id', 'role', 'content', 'output', 'files', 'contextSummary', 'usage')
-                        }
-                    )
+                    db_messages.append({k: v for k, v in assistant_message.items() if k in MESSAGE_REPLAY_KEYS})
 
             system_message = get_system_message(form_data.get('messages', []))
             form_data['messages'] = [system_message, *db_messages] if system_message else db_messages
@@ -2486,6 +2488,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             log.exception('Context compaction failed; continuing with full chat history')
 
     # Process messages with OR-aligned output items for clean LLM messages
+    for message in form_data.get('messages', []):
+        output = message.get('output')
+        # reasoning_details can be model/provider-bound, so only replay them
+        # for output produced by the same model.
+        if message.get('role') == 'assistant' and message.get('model') != model['id'] and isinstance(output, list):
+            message['output'] = strip_reasoning_details(output)
+
     form_data['messages'] = process_messages_with_output(
         form_data.get('messages', []),
         reasoning_format=get_reasoning_format(model),
@@ -3365,13 +3374,18 @@ async def drain_approved_tool_calls(request, form_data, user, model, metadata) -
         if db_messages:
             assistant_message = await Chats.get_message_by_id_and_message_id(chat_id, message_id)
             if assistant_message:
-                db_messages.append(
-                    {
-                        k: v
-                        for k, v in assistant_message.items()
-                        if k in ('id', 'role', 'content', 'output', 'files', 'contextSummary', 'usage')
-                    }
-                )
+                db_messages.append({k: v for k, v in assistant_message.items() if k in MESSAGE_REPLAY_KEYS})
+            for message in db_messages:
+                output = message.get('output')
+                # reasoning_details can be model/provider-bound, so only replay them
+                # for output produced by the same model.
+                if (
+                    message.get('role') == 'assistant'
+                    and message.get('model') != model['id']
+                    and isinstance(output, list)
+                ):
+                    message['output'] = strip_reasoning_details(output)
+
             form_data['messages'] = process_messages_with_output(
                 db_messages,
                 reasoning_format=get_reasoning_format(model),
@@ -3822,7 +3836,8 @@ async def outlet_filter_handler(ctx):
 
     Replaces the separate POST /api/chat/completed round-trip.
     Persists outlet-modified content to DB and emits a chat:outlet event
-    so the frontend can sync its in-memory state.
+    so the frontend can sync its in-memory state. Returns immediately when
+    the model has no filters.
 
     For temp/API chats, messages are built from form_data plus ctx['assistant_message'].
     """
@@ -3844,6 +3859,17 @@ async def outlet_filter_handler(ctx):
 
     is_unsaved_chat = not is_saved_chat_id(chat_id)
     try:
+        filter_functions = (
+            await get_filter_functions(request, model, metadata.get('filter_ids', [])) if ENABLE_PLUGINS else []
+        )
+        model_id = model.get('id') if isinstance(model, dict) else model
+        models = request.app.state.MODELS
+        has_pipeline_outlet_filters = bool(
+            (isinstance(model, dict) and 'pipeline' in model) or get_sorted_filters(model_id, models)
+        )
+        if not filter_functions and not has_pipeline_outlet_filters:
+            return
+
         messages_map = None
 
         if is_unsaved_chat:
@@ -3878,8 +3904,6 @@ async def outlet_filter_handler(ctx):
             if not message_list:
                 return
 
-        model_id = model.get('id') if isinstance(model, dict) else model
-
         outlet_data = {
             'model': model_id,
             'messages': [
@@ -3903,7 +3927,6 @@ async def outlet_filter_handler(ctx):
         }
 
         # Pipeline outlet filters
-        models = request.app.state.MODELS
         try:
             outlet_data = await process_pipeline_outlet_filter(request, outlet_data, user, models)
         except Exception as e:
@@ -3919,9 +3942,7 @@ async def outlet_filter_handler(ctx):
             '__model__': model,
         }
 
-        if ENABLE_PLUGINS:
-            filter_functions = await get_filter_functions(request, model, metadata.get('filter_ids', []))
-
+        if filter_functions:
             outlet_result, _ = await process_filter_functions(
                 request=request,
                 filter_context=None,
@@ -4562,13 +4583,14 @@ async def streaming_chat_response_handler(response, ctx):
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
             DETECT_REASONING_TAGS = reasoning_tags_param is not False
 
-            # Mirror the five gates from utils/tools.py get_builtin_tools so the
-            # legacy XML-tag path enforces the same authz as native FC.
+            # Legacy tool-calling only: native FC gets execute_code as a builtin tool.
+            # Same five authz gates as utils/tools.py get_builtin_tools.
             features = metadata.get('features', {}) or {}
             model_capabilities = model.get('info', {}).get('meta', {}).get('capabilities') or {}
             builtin_tools_meta = model.get('info', {}).get('meta', {}).get('builtinTools', {})
             DETECT_CODE_INTERPRETER = (
-                bool(features.get('code_interpreter'))
+                metadata.get('params', {}).get('function_calling') == 'legacy'
+                and bool(features.get('code_interpreter'))
                 and builtin_tools_meta.get('code_interpreter', True)
                 and await Config.get('code_interpreter.enable')
                 and model_capabilities.get('code_interpreter', True)
@@ -4609,7 +4631,6 @@ async def streaming_chat_response_handler(response, ctx):
                         )
 
                 async def stream_body_handler(response, form_data):
-                    nonlocal content_parts
                     nonlocal usage
                     nonlocal output
                     nonlocal prior_output
@@ -4626,14 +4647,20 @@ async def streaming_chat_response_handler(response, ctx):
                     last_delta_type = None
                     last_delta_key = None
 
-                    def response_stream_content(stream_output: list | None = None):
-                        return ''.join(content_parts) or get_output_text(
-                            stream_output if stream_output is not None else full_output()
-                        )
+                    joined_content = ''
+                    joined_part_count = 0
 
                     async def save_current_response_stream(stream_output: list | None = None):
+                        nonlocal joined_content
+                        nonlocal joined_part_count
+
                         if not chat_id or not metadata.get('message_id'):
                             return
+
+                        # content_parts is append-only, so its length tells us when the join is stale
+                        if joined_part_count != len(content_parts):
+                            joined_content = ''.join(content_parts)
+                            joined_part_count = len(content_parts)
 
                         current_stream_output = stream_output if stream_output is not None else full_output()
                         await save_response_stream(
@@ -4641,7 +4668,7 @@ async def streaming_chat_response_handler(response, ctx):
                             response_stream_task_id,
                             chat_id,
                             metadata.get('message_id'),
-                            response_stream_content(current_stream_output),
+                            joined_content or get_output_text(current_stream_output),
                             current_stream_output,
                         )
 
@@ -5945,6 +5972,9 @@ async def streaming_chat_response_handler(response, ctx):
                             await stream_body_handler(res, new_form_data)
                             output[:0] = prior_output
                             prior_output = []
+                        elif getattr(res, 'status_code', 200) >= 400:
+                            await emit_message_error(get_message_error_content(get_response_error_detail(res)))
+                            break
                         else:
                             break
                     except Exception as e:
@@ -6129,6 +6159,9 @@ async def streaming_chat_response_handler(response, ctx):
 
                             if isinstance(res, StreamingResponse):
                                 await stream_body_handler(res, new_form_data)
+                            elif getattr(res, 'status_code', 200) >= 400:
+                                await emit_message_error(get_message_error_content(get_response_error_detail(res)))
+                                break
                             else:
                                 break
                         except Exception as e:
@@ -6253,14 +6286,26 @@ async def streaming_chat_response_handler(response, ctx):
                     yield wrap_item(JSONCodec.dumps(event))
 
             async for data in original_generator:
-                data, _ = await process_filter_functions(
-                    request=request,
-                    filter_context=filter_context,
-                    filter_functions=filter_functions,
-                    filter_type='stream',
-                    form_data=data,
-                    extra_params=extra_params,
-                )
+                if filter_functions:
+                    line = data.decode('utf-8', 'replace') if isinstance(data, bytes) else data
+                    if isinstance(line, str) and line.startswith('data:'):
+                        payload = line.removeprefix('data:').strip()
+                        if payload and payload != '[DONE]':
+                            try:
+                                event = JSONCodec.loads(payload)
+                            except JSONCodec.JSONDecodeError:
+                                event = None
+
+                            if isinstance(event, dict):
+                                event, _ = await process_filter_functions(
+                                    request=request,
+                                    filter_context=filter_context,
+                                    filter_functions=filter_functions,
+                                    filter_type='stream',
+                                    form_data=event,
+                                    extra_params=extra_params,
+                                )
+                                data = wrap_item(JSONCodec.dumps(event)) if event else None
 
                 if data:
                     if has_api_outlet_filters:
