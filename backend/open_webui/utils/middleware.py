@@ -976,6 +976,25 @@ async def apply_source_context_to_messages(
         )
 
 
+BASE64_IMAGE_DATA_URI_RE = re.compile(r'data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}', re.IGNORECASE)
+
+
+def extract_base64_images(value: Any, files: list) -> Any:
+    """Move base64 image data URIs out of a tool result so they do not reach the model as text."""
+    if isinstance(value, str):
+        if BASE64_IMAGE_DATA_URI_RE.fullmatch(value):
+            files.append({'type': 'image', 'url': value})
+            return '[image]'
+        return value
+    if isinstance(value, dict):
+        return {key: extract_base64_images(item, files) for key, item in value.items()}
+    if isinstance(value, list):
+        return [extract_base64_images(item, files) for item in value]
+    if isinstance(value, tuple):
+        return tuple(extract_base64_images(item, files) for item in value)
+    return value
+
+
 async def process_tool_result(
     request,
     tool_function_name,
@@ -1161,8 +1180,9 @@ async def process_tool_result(
                             tool_response.append(resource.get('uri'))
             tool_result = tool_response[0] if len(tool_response) == 1 else tool_response
         else:  # OpenAPI
-            for item in tool_result:
-                if isinstance(item, str) and item.startswith('data:'):
+            # Images are left to extract_base64_images below, which attaches them so the model can see them.
+            for item in list(tool_result):
+                if isinstance(item, str) and item.startswith('data:') and not BASE64_IMAGE_DATA_URI_RE.fullmatch(item):
                     tool_result_files.append(
                         {
                             'type': 'data',
@@ -1170,6 +1190,8 @@ async def process_tool_result(
                         }
                     )
                     tool_result.remove(item)
+
+    tool_result = extract_base64_images(tool_result, tool_result_files)
 
     if isinstance(tool_result, list):
         tool_result = {'results': tool_result}
@@ -2240,7 +2262,7 @@ def sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
-# Ids are validated as [a-z0-9_-]+ on create; matching that keeps ordinary "<$..." text intact.
+# Match candidate mentions using the same ID characters allowed on skill creation.
 SKILL_MENTION_RE = re.compile(r'<(?:\$([a-z0-9_-]+)(?:\|[^>]*)?|/([a-z0-9_-]+)\|[^>]*)>')
 
 
@@ -2263,25 +2285,27 @@ def extract_skill_ids_from_messages(messages: list[dict]) -> set[str]:
     return ids
 
 
-SKILL_MENTION_STRIP_RE = re.compile(r'<(?:\$[a-z0-9_-]+(?:\|([^>]*))?|/[a-z0-9_-]+\|([^>]*))>')
+SKILL_MENTION_STRIP_RE = re.compile(r'<(?:\$([a-z0-9_-]+)(?:\|([^>]*))?|/([a-z0-9_-]+)\|([^>]*))>')
 
 
-def strip_skill_mentions(messages: list[dict]) -> None:
-    """Replace <$skillId|label> and </skillId|label> mention tags with the label in-place."""
+def strip_skill_mentions(messages: list[dict], skill_ids: set[str]) -> None:
+    """Replace mentions of resolved skills with their label, preserving all other text."""
 
     def label(match):
-        return match.group(1) or match.group(2) or ''
+        if (match.group(1) or match.group(3)) not in skill_ids:
+            return match.group(0)
+        return match.group(2) or match.group(4) or ''
 
     for message in messages:
         content = message.get('content')
         if isinstance(content, str) and SKILL_MENTION_STRIP_RE.search(content):
-            message['content'] = SKILL_MENTION_STRIP_RE.sub(label, content).strip()
+            message['content'] = SKILL_MENTION_STRIP_RE.sub(label, content)
         elif isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get('type') == 'text':
                     text = part.get('text', '')
                     if SKILL_MENTION_STRIP_RE.search(text):
-                        part['text'] = SKILL_MENTION_STRIP_RE.sub(label, text).strip()
+                        part['text'] = SKILL_MENTION_STRIP_RE.sub(label, text)
 
 
 async def connect_mcp_server(
@@ -2776,8 +2800,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 append=True,
             )
 
-    # Strip <$skillId|label> mention tags so the model doesn't see raw markup.
-    strip_skill_mentions(form_data.get('messages', []))
+    # Strip only resolved skill mentions; ordinary text such as Perl's <$fh> stays intact.
+    strip_skill_mentions(form_data.get('messages', []), {s.id for s in available_skills})
 
     prompt = get_last_user_message(form_data['messages'])
 
@@ -6350,14 +6374,30 @@ async def streaming_chat_response_handler(response, ctx):
                         pass
 
                 async def save_cancelled_state():
-                    await event_emitter({'type': 'chat:tasks:cancel'})
+                    cancelled_output = full_output()
+                    result_call_ids = {
+                        item.get('call_id')
+                        for item in cancelled_output
+                        if item.get('type') == 'function_call_output' and item.get('call_id')
+                    }
+                    for item in cancelled_output:
+                        # A tool call is stamped completed when its arguments finish, before the tool runs
+                        is_running_tool_call = (
+                            item.get('type') == 'function_call'
+                            and item.get('status') == 'completed'
+                            and (item.get('call_id') or item.get('id')) not in result_call_ids
+                        )
+                        if item.get('status') == 'in_progress' or is_running_tool_call:
+                            item['status'] = 'incomplete'
+
+                    await event_emitter({'type': 'chat:tasks:cancel', 'data': {'output': cancelled_output}})
                     if save_to_chat:
                         await Chats.upsert_message_to_chat_by_id_and_message_id(
                             metadata['chat_id'],
                             metadata['message_id'],
                             {
                                 'done': True,
-                                'output': full_output(),
+                                'output': cancelled_output,
                             },
                         )
                     await clear_response_stream(request.app.state.redis, response_stream_task_id)
