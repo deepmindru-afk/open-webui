@@ -3177,6 +3177,11 @@ async def execute_tool_call_for_output(request, form_data, user, metadata, event
                         'The model generated malformed or incomplete JSON.'
                     ),
                 }
+    if not isinstance(params, dict):
+        return {
+            'tool_call_id': tool_call.get('id', ''),
+            'content': 'Error: Tool call arguments must be a JSON object.',
+        }
     tool_call.setdefault('function', {})['arguments'] = JSONCodec.dumps(params)
 
     tool = tools.get(name)
@@ -5742,12 +5747,23 @@ async def streaming_chat_response_handler(response, ctx):
                                 except Exception as e:
                                     log.debug(e)
                                     return None
+                        if not isinstance(params, dict):
+                            raise ValueError('Tool call arguments must be a JSON object.')
                         tool_call.setdefault('function', {})['arguments'] = JSONCodec.dumps(params)
                         return params
 
                     async def execute_tool_call(tool_call):
                         name = tool_call.get('function', {}).get('name', '')
-                        params = parse_tool_params(tool_call)
+                        try:
+                            params = parse_tool_params(tool_call)
+                        except ValueError:
+                            return (
+                                {},
+                                f'Error: Tool call arguments for `{name}` must be a JSON object. Please try again.',
+                                None,
+                                None,
+                                False,
+                            )
                         if params is None:
                             return {}, None, None, None, False
                         tool = tools.get(name)
@@ -6419,62 +6435,68 @@ async def streaming_chat_response_handler(response, ctx):
             def wrap_item(item):
                 return f'data: {item}\n\n'
 
-            assistant_message = {}
-            filter_context = FilterContext()
-            has_api_outlet_filters = ENABLE_API_OUTLET_FILTERS and bool(filter_functions)
-            if ENABLE_API_OUTLET_FILTERS and not has_api_outlet_filters:
-                try:
-                    model_id = model.get('id') if isinstance(model, dict) else model
-                    has_api_outlet_filters = bool(
-                        (isinstance(model, dict) and 'pipeline' in model)
-                        or get_sorted_filters(model_id, request.app.state.MODELS)
+            try:
+                assistant_message = {}
+                filter_context = FilterContext()
+                has_api_outlet_filters = ENABLE_API_OUTLET_FILTERS and bool(filter_functions)
+                if ENABLE_API_OUTLET_FILTERS and not has_api_outlet_filters:
+                    try:
+                        model_id = model.get('id') if isinstance(model, dict) else model
+                        has_api_outlet_filters = bool(
+                            (isinstance(model, dict) and 'pipeline' in model)
+                            or get_sorted_filters(model_id, request.app.state.MODELS)
+                        )
+                    except Exception:
+                        has_api_outlet_filters = True
+
+                for event in events:
+                    event, _ = await process_filter_functions(
+                        request=request,
+                        filter_context=filter_context,
+                        filter_functions=filter_functions,
+                        filter_type='stream',
+                        form_data=event,
+                        extra_params=extra_params,
                     )
-                except Exception:
-                    has_api_outlet_filters = True
 
-            for event in events:
-                event, _ = await process_filter_functions(
-                    request=request,
-                    filter_context=filter_context,
-                    filter_functions=filter_functions,
-                    filter_type='stream',
-                    form_data=event,
-                    extra_params=extra_params,
-                )
+                    if event:
+                        yield wrap_item(JSONCodec.dumps(event))
 
-                if event:
-                    yield wrap_item(JSONCodec.dumps(event))
+                async for data in original_generator:
+                    if filter_functions:
+                        line = data.decode('utf-8', 'replace') if isinstance(data, bytes) else data
+                        if isinstance(line, str) and line.startswith('data:'):
+                            payload = line.removeprefix('data:').strip()
+                            if payload and payload != '[DONE]':
+                                try:
+                                    event = JSONCodec.loads(payload)
+                                except JSONCodec.JSONDecodeError:
+                                    event = None
 
-            async for data in original_generator:
-                if filter_functions:
-                    line = data.decode('utf-8', 'replace') if isinstance(data, bytes) else data
-                    if isinstance(line, str) and line.startswith('data:'):
-                        payload = line.removeprefix('data:').strip()
-                        if payload and payload != '[DONE]':
-                            try:
-                                event = JSONCodec.loads(payload)
-                            except JSONCodec.JSONDecodeError:
-                                event = None
+                                if isinstance(event, dict):
+                                    event, _ = await process_filter_functions(
+                                        request=request,
+                                        filter_context=filter_context,
+                                        filter_functions=filter_functions,
+                                        filter_type='stream',
+                                        form_data=event,
+                                        extra_params=extra_params,
+                                    )
+                                    data = wrap_item(JSONCodec.dumps(event)) if event else None
 
-                            if isinstance(event, dict):
-                                event, _ = await process_filter_functions(
-                                    request=request,
-                                    filter_context=filter_context,
-                                    filter_functions=filter_functions,
-                                    filter_type='stream',
-                                    form_data=event,
-                                    extra_params=extra_params,
-                                )
-                                data = wrap_item(JSONCodec.dumps(event)) if event else None
+                    if data:
+                        if has_api_outlet_filters:
+                            update_assistant_message_from_stream(assistant_message, data)
+                        yield data
 
-                if data:
-                    if has_api_outlet_filters:
-                        update_assistant_message_from_stream(assistant_message, data)
-                    yield data
-
-            if has_api_outlet_filters and assistant_message:
-                ctx['assistant_message'] = assistant_message
-                await outlet_filter_handler(ctx)
+                if has_api_outlet_filters and assistant_message:
+                    ctx['assistant_message'] = assistant_message
+                    await outlet_filter_handler(ctx)
+            except Exception as e:
+                log.exception('Chat completion stream failed mid-response: %s', e)
+                # Separate the error frame from any unfinished upstream event.
+                yield f'\n\ndata: {JSONCodec.dumps({"error": {"message": "Chat completion stream failed"}})}\n\n'
+                yield 'data: [DONE]\n\n'
 
         return StreamingResponse(
             stream_wrapper(response.body_iterator, events),
