@@ -14,6 +14,7 @@ import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
+from urllib.parse import unquote
 from uuid import uuid4
 
 from aiocache import cached
@@ -995,6 +996,29 @@ def extract_base64_images(value: Any, files: list) -> Any:
     return value
 
 
+async def store_tool_result_image(request, image_url, metadata, user):
+    """Keep saved tool images out of chat JSON, falling back to inline data if storage fails."""
+    metadata = metadata or {}
+    if (
+        not isinstance(image_url, str)
+        or not image_url.startswith('data:image/')
+        or not is_saved_chat_id(metadata.get('chat_id'))
+    ):
+        return image_url
+
+    try:
+        stored_url = await get_file_url_from_base64(
+            request,
+            image_url,
+            {key: metadata.get(key) for key in ('chat_id', 'message_id', 'session_id')},
+            user,
+        )
+        return stored_url or image_url
+    except Exception:
+        log.warning('Could not store tool image; retaining inline image')
+        return image_url
+
+
 async def process_tool_result(
     request,
     tool_function_name,
@@ -1425,6 +1449,12 @@ async def chat_completion_tools_handler(
                     )
 
                     if tool_result_files:
+                        for file_item in tool_result_files:
+                            if file_item.get('type') == 'image':
+                                file_item['url'] = await store_tool_result_image(
+                                    request, file_item.get('url'), metadata, user
+                                )
+
                         await event_emitter(
                             {
                                 'type': 'files',
@@ -2113,7 +2143,7 @@ async def convert_url_images_to_base64(form_data, user=None):
         new_content = []
 
         for item in content:
-            if not isinstance(item, dict) or item.get('type') != 'image_url':
+            if not isinstance(item, dict) or item.get('type') not in ('image_url', 'input_image'):
                 new_content.append(item)
                 continue
 
@@ -2130,13 +2160,15 @@ async def convert_url_images_to_base64(form_data, user=None):
 
             try:
                 base64_data = await get_image_base64_from_url(image_url, user=user)
-                if base64_data:
+                if base64_data and isinstance(image_url_data, str):
+                    new_content.append({**item, 'image_url': base64_data})
+                elif base64_data:
                     image_url_payload = {'url': base64_data}
                     if isinstance(image_url_data, dict) and image_url_data.get('detail'):
                         image_url_payload['detail'] = image_url_data['detail']
                     new_content.append(
                         {
-                            'type': 'image_url',
+                            'type': item['type'],
                             'image_url': image_url_payload,
                         }
                     )
@@ -2262,8 +2294,9 @@ def sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
-# Match candidate mentions using the same ID characters allowed on skill creation.
-SKILL_MENTION_RE = re.compile(r'<(?:\$([a-z0-9_-]+)(?:\|[^>]*)?|/([a-z0-9_-]+)\|[^>]*)>')
+# Match DB skill IDs and terminal skill IDs created by the $ picker.
+SKILL_ID_RE = r'(?:[a-z0-9_-]+|terminal:[^|>\s]+)'
+SKILL_MENTION_RE = re.compile(rf'<(?:\$({SKILL_ID_RE})(?:\|[^>]*)?|/({SKILL_ID_RE})\|[^>]*)>')
 
 
 def _get_text_parts(message: dict) -> list[str]:
@@ -2285,7 +2318,7 @@ def extract_skill_ids_from_messages(messages: list[dict]) -> set[str]:
     return ids
 
 
-SKILL_MENTION_STRIP_RE = re.compile(r'<(?:\$([a-z0-9_-]+)(?:\|([^>]*))?|/([a-z0-9_-]+)\|([^>]*))>')
+SKILL_MENTION_STRIP_RE = re.compile(rf'<(?:\$({SKILL_ID_RE})(?:\|([^>]*))?|/({SKILL_ID_RE})\|([^>]*))>')
 
 
 def strip_skill_mentions(messages: list[dict], skill_ids: set[str]) -> None:
@@ -2720,6 +2753,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     terminal_id = form_data.pop('terminal_id', None)
     files = form_data.pop('files', None)
     form_data.pop('folder_id', None)
+    metadata['terminal_id'] = terminal_id
 
     # If the original caller provided tools, use them as-is (skip resolution).
     # Otherwise, save any tools that filter inlets added for merging later.
@@ -2733,6 +2767,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         | mentioned_skill_ids
     )
     available_skills = []
+    terminal_skills = []
     view_skill_ids = []
     chat = None
     if is_saved_chat_id(metadata.get('chat_id')):
@@ -2769,14 +2804,31 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
     )
 
-    if skill_ids:
+    if skill_ids or use_builtin_tools:
+        import aiohttp
+        from open_webui.env import AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL, AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
         from open_webui.models.skills import Skills as SkillsModel
+        from open_webui.utils.terminals import (
+            format_terminal_skill_context,
+            format_terminal_skill_manifest_entry,
+            get_terminal_request_info,
+            get_terminal_skill,
+        )
 
-        accessible_skills = {s.id: s for s in await SkillsModel.get_skills(user_id=user.id, ids=skill_ids)}
-        for sid in skill_ids:
-            s = accessible_skills.get(sid)
-            if s and s.is_active:
-                available_skills.append(s)
+        terminal_skill_prefix = 'terminal:'
+        db_skill_ids = [sid for sid in skill_ids if not sid.startswith(terminal_skill_prefix)]
+        terminal_skill_ids = [sid for sid in skill_ids if sid.startswith(terminal_skill_prefix)]
+
+        if use_builtin_tools:
+            accessible_skills = {s.id: s for s in await SkillsModel.get_skills(user_id=user.id)}
+            db_skill_ids = sorted(accessible_skills)
+        else:
+            accessible_skills = {s.id: s for s in await SkillsModel.get_skills(user_id=user.id, ids=db_skill_ids)}
+
+        for sid in db_skill_ids:
+            skill = accessible_skills.get(sid)
+            if skill and skill.is_active:
+                available_skills.append(skill)
 
         skill_manifest = ''
         for skill in available_skills:
@@ -2793,6 +2845,46 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     f'<description>{skill.description or ""}</description>\n</skill>\n'
                 )
 
+        terminal_request = (
+            await get_terminal_request_info(request, user, metadata, extra_params) if terminal_id or terminal_skill_ids else None
+        )
+
+        listed_terminal_skills = []
+        if terminal_request:
+            terminal_base_url, terminal_headers, terminal_cookies = terminal_request
+            timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA)
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                async with session.get(
+                    f'{terminal_base_url.rstrip("/")}/skills',
+                    headers=terminal_headers,
+                    cookies=terminal_cookies,
+                    ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
+                ) as response:
+                    if response.status == 200:
+                        listed = await response.json()
+                        listed_terminal_skills = listed if isinstance(listed, list) else []
+
+                if terminal_id and use_builtin_tools:
+                    terminal_skills = listed_terminal_skills
+                elif terminal_skill_ids:
+                    terminal_skill_map = {skill['id']: skill for skill in listed_terminal_skills}
+                    terminal_skills = [skill for sid in terminal_skill_ids if (skill := terminal_skill_map.get(sid))]
+
+                for skill in terminal_skills:
+                    sid = skill['id']
+                    if sid in mentioned_skill_ids or not use_builtin_tools:
+                        skill_name = unquote(sid.removeprefix(terminal_skill_prefix))
+                        loaded = await get_terminal_skill(request, user.model_dump(), metadata, skill_name, extra_params)
+                        if loaded:
+                            form_data['messages'] = add_or_update_system_message(
+                                format_terminal_skill_context(loaded),
+                                form_data['messages'],
+                                append=True,
+                            )
+                    else:
+                        view_skill_ids.append(sid)
+                        skill_manifest += format_terminal_skill_manifest_entry(skill)
+
         if skill_manifest:
             form_data['messages'] = add_or_update_system_message(
                 f'<available_skills>\n{skill_manifest}</available_skills>',
@@ -2801,7 +2893,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             )
 
     # Strip only resolved skill mentions; ordinary text such as Perl's <$fh> stays intact.
-    strip_skill_mentions(form_data.get('messages', []), {s.id for s in available_skills})
+    resolved_skill_ids = {s.id for s in available_skills} | {s['id'] for s in terminal_skills}
+    strip_skill_mentions(form_data.get('messages', []), resolved_skill_ids)
 
     prompt = get_last_user_message(form_data['messages'])
 
@@ -2810,7 +2903,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # the stripped result is an empty string which causes 400 errors on providers
     # that reject empty content blocks (e.g. AWS Bedrock ConverseStream).
     if not prompt or not prompt.strip():
-        fallback = ', '.join(s.name for s in available_skills)
+        fallback = ', '.join([s.name for s in available_skills] + [s['name'] for s in terminal_skills])
         if fallback:
             set_last_user_message_content(fallback, form_data['messages'])
             prompt = fallback
@@ -2928,7 +3021,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         # Resolve terminal tools if terminal_id is set (outside tool_ids check
         # so system terminals work even when no other tools are selected)
         terminal_capability = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('terminal', True)
-        if terminal_id and terminal_capability:
+        terminal_connection_ids = {
+            connection.get('id') for connection in await Config.get('terminal_server.connections', []) or []
+        }
+        if terminal_id and terminal_capability and terminal_id in terminal_connection_ids:
             try:
                 terminal_result = await get_terminal_tools(
                     request,
@@ -3321,7 +3417,8 @@ async def drain_approved_tool_calls(request, form_data, user, model, metadata) -
         display_files = []
         for file_item in result.get('files', []):
             if file_item.get('type') == 'image' and file_item.get('url', '').startswith('data:'):
-                output_parts.append({'type': 'input_image', 'image_url': file_item['url']})
+                image_url = await store_tool_result_image(request, file_item['url'], metadata, user)
+                output_parts.append({'type': 'input_image', 'image_url': image_url})
             else:
                 display_files.append(file_item)
 
@@ -5907,7 +6004,8 @@ async def streaming_chat_response_handler(response, ctx):
                         for file_item in result.get('files', []):
                             if file_item.get('type') == 'image' and file_item.get('url', '').startswith('data:'):
                                 # LLM-only: add as input_image part, not frontend display output.
-                                output_parts.append({'type': 'input_image', 'image_url': file_item['url']})
+                                image_url = await store_tool_result_image(request, file_item['url'], metadata, user)
+                                output_parts.append({'type': 'input_image', 'image_url': image_url})
                             else:
                                 # Frontend display (MCP images, audio, etc.)
                                 display_files.append(file_item)
@@ -6070,6 +6168,8 @@ async def streaming_chat_response_handler(response, ctx):
                                         ],
                                     }
                                 )
+
+                        new_form_data = await convert_url_images_to_base64(new_form_data, user=user)
 
                         if filter_functions:
                             new_form_data, _ = await process_filter_functions(
