@@ -115,6 +115,7 @@ from open_webui.utils.misc import (
     get_last_user_message_item,
     get_message_list,
     get_output_text,
+    get_paired_tool_call_ids,
     get_response_error_detail,
     get_reasoning_details,
     get_system_message,
@@ -932,6 +933,9 @@ def handle_responses_streaming_event(
         # State Machine Event: Failed
         error = data.get('response', {}).get('error', {})
         return current_output, {'error': error}
+
+    elif event_type == 'error':
+        return current_output, {'error': data}
 
     else:
         return current_output, None
@@ -2303,25 +2307,12 @@ def process_messages_with_output(
 
 
 def sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
-    tool_result_ids = {
-        message.get('tool_call_id')
-        for message in messages
-        if message.get('role') == 'tool' and message.get('tool_call_id')
-    }
-
-    tool_call_ids = {
-        tool_call.get('id')
-        for message in messages
-        for tool_call in (message.get('tool_calls') or [])
-        if message.get('role') == 'assistant' and tool_call.get('id')
-    }
+    paired_ids_by_message = get_paired_tool_call_ids(messages)
 
     sanitized = []
-    for message in messages:
+    for message, paired_ids in zip(messages, paired_ids_by_message):
         if message.get('role') == 'assistant' and message.get('tool_calls'):
-            kept = [
-                tool_call for tool_call in message.get('tool_calls') or [] if tool_call.get('id') in tool_result_ids
-            ]
+            kept = [tool_call for tool_call in message.get('tool_calls') or [] if tool_call.get('id') in paired_ids]
             if kept:
                 sanitized.append({**message, 'tool_calls': kept})
             else:
@@ -2330,7 +2321,7 @@ def sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
                 clean.pop('reasoning_items', None)
                 if clean.get('content'):
                     sanitized.append(clean)
-        elif message.get('role') != 'tool' or message.get('tool_call_id') in tool_call_ids:
+        elif message.get('role') != 'tool' or message.get('tool_call_id') in paired_ids:
             sanitized.append(message)
 
     return sanitized
@@ -4549,7 +4540,7 @@ async def streaming_chat_response_handler(response, ctx):
 
                 last_type = output[-1].get('type', '') if output else ''
 
-                if last_type == 'message':
+                if last_type == 'message' and output[-1].get('_tag_type') != content_type:
                     # Use the output item's own text for tag detection
                     item = output[-1]
                     item_text = get_last_text(output)
@@ -4679,14 +4670,14 @@ async def streaming_chat_response_handler(response, ctx):
 
                         # Strip start and end tags from content
                         start_tag_pattern = _start_tag_pattern(start_tag)
-                        block_content = re.sub(start_tag_pattern, '', block_content).strip()
+                        block_content = re.sub(start_tag_pattern, '', block_content)
 
                         end_tag_pattern = rf'{re.escape(end_tag)}'
                         end_tag_regex = re.compile(end_tag_pattern, re.DOTALL)
                         split_content = end_tag_regex.split(block_content, maxsplit=1)
 
                         block_content = split_content[0].strip() if split_content else ''
-                        leftover_content = split_content[1].strip() if len(split_content) > 1 else ''
+                        leftover_content = split_content[1].lstrip() if len(split_content) > 1 else ''
 
                         if block_content:
                             # Update the item with final content
@@ -5113,8 +5104,8 @@ async def streaming_chat_response_handler(response, ctx):
                                             'data': data,
                                         }
                                     )
-                                # Check for Responses API events (type field starts with "response.")
-                                elif data.get('type', '').startswith('response.'):
+                                # Check for Responses API events
+                                elif data.get('type', '').startswith('response.') or data.get('type', '') == 'error':
                                     response_data_type = data.get('type', '')
                                     response_data_is_delta = response_data_type.endswith('.delta')
                                     output, response_metadata = handle_responses_streaming_event(data, output)
@@ -5173,6 +5164,20 @@ async def streaming_chat_response_handler(response, ctx):
                                             response_metadata['usage'] = usage
 
                                         if response_metadata.get('error'):
+                                            log.error(
+                                                'Provider returned error (streaming): %s', response_metadata['error']
+                                            )
+                                            if save_to_chat:
+                                                try:
+                                                    await Chats.upsert_message_to_chat_by_id_and_message_id(
+                                                        metadata['chat_id'],
+                                                        metadata['message_id'],
+                                                        {
+                                                            'error': {'content': response_metadata['error']},
+                                                        },
+                                                    )
+                                                except Exception:
+                                                    pass
                                             await event_emitter(
                                                 {
                                                     'type': 'chat:completion',

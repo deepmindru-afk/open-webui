@@ -305,7 +305,7 @@
 				}
 			}
 
-			text = text.replaceAll('{{CLIPBOARD}}', clipboardText.replaceAll('\r\n', '\n'));
+			text = text.replaceAll('{{CLIPBOARD}}', () => clipboardText.replaceAll('\r\n', '\n'));
 		}
 
 		if (text.includes('{{USER_LOCATION}}')) {
@@ -1452,7 +1452,7 @@
 						.insertContentAt(range, [
 							{
 								type: 'mention',
-								attrs: props
+								attrs: { ...props, mentionSuggestionChar: '/' }
 							},
 							{ type: 'text', text: ' ' }
 						])
