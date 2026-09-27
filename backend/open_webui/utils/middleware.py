@@ -510,6 +510,7 @@ def get_citation_source_from_tool_result(
                         },
                         'document': [],
                         'metadata': [],
+                        'distances': [],
                     }
 
                 sources_by_file[key]['document'].append(content)
@@ -521,6 +522,8 @@ def get_citation_source_from_tool_result(
                         **({'note_id': note_id} if note_id else {}),
                     }
                 )
+                if 'distance' in chunk:
+                    sources_by_file[key]['distances'].append(chunk['distance'])
 
             # Return all grouped sources as a list
             if sources_by_file:
@@ -3039,6 +3042,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             for tool_server in direct_tool_servers:
                 if tool_server.get('is_terminal') is True and not terminal_capability:
                     continue
+                # Copy so the pops below keep metadata intact for sub-agents and approval resumes
+                tool_server = dict(tool_server)
                 system_prompt = tool_server.pop('system_prompt', None)
                 if system_prompt:
                     form_data['messages'] = add_or_update_system_message(
@@ -3603,7 +3608,7 @@ async def pause_for_tool_approval(chat_id: str, message_id: str, output: list[di
             if not has_pending_approval:
                 item['status'] = 'pending'
                 has_pending_approval = True
-            elif item.get('status') == 'in_progress':
+            elif item.get('status') in {'in_progress', 'completed'}:
                 item['status'] = 'queued'
 
     await Chats.upsert_message_to_chat_by_id_and_message_id(
