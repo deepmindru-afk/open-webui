@@ -193,6 +193,7 @@ from open_webui.socket.main import (
     periodic_session_pool_cleanup,
     periodic_usage_pool_cleanup,
     redis_event_listener,
+    sio,
 )
 from open_webui.socket.main import (
     app as socket_app,
@@ -221,6 +222,7 @@ from open_webui.utils.auth import (
     get_http_authorization_cred,
     get_license_data,
     get_verified_user,
+    is_valid_token,
 )
 from open_webui.utils.chat import (
     chat_completed as chat_completed_handler,
@@ -397,6 +399,9 @@ async def lifespan(app: FastAPI):
 
     if WEBSOCKET_MANAGER == 'redis':
         app.state.redis_event_listener = asyncio.create_task(redis_event_listener())
+        # socket.io only starts listening on its first connect; event call answers need it earlier
+        sio.manager_initialized = True
+        sio.manager.initialize()
 
     app.state.periodic_usage_pool_cleanup = asyncio.create_task(periodic_usage_pool_cleanup())
     app.state.periodic_session_pool_cleanup = asyncio.create_task(periodic_session_pool_cleanup())
@@ -497,7 +502,7 @@ async def lifespan(app: FastAPI):
     await publish_event(app, EVENTS.SYSTEM_SHUTDOWN_COMPLETED, source='system')
 
 
-# Opt-in (ENABLE_ORJSON): orjson for request-body parsing and JSONResponse bodies;
+# ENABLE_ORJSON: orjson for request-body parsing and JSONResponse bodies;
 # response_model routes keep FastAPI's Pydantic fast path either way.
 apply_orjson_http_json()
 
@@ -1001,6 +1006,7 @@ async def unload_model(request: Request, form_data: ModelUnloadForm, user=Depend
                         data=payload,
                         headers=headers,
                         cookies=cookies,
+                        ssl=AIOHTTP_CLIENT_SESSION_SSL,
                     ) as r:
                         if not r.ok:
                             errors.append({'url_idx': idx, 'error': await r.text()})
@@ -1040,6 +1046,7 @@ async def unload_model(request: Request, form_data: ModelUnloadForm, user=Depend
                         json={'model': actual_model},
                         headers=headers,
                         cookies=cookies,
+                        ssl=AIOHTTP_CLIENT_SESSION_SSL,
                     ) as r:
                         if not r.ok:
                             detail = await r.text()
@@ -2242,7 +2249,7 @@ async def get_app_config(request: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail='Invalid token',
             )
-        if data is not None and 'id' in data:
+        if data is not None and 'id' in data and await is_valid_token(data, request.app.state.redis):
             user = await Users.get_user_by_id(data['id'])
 
     onboarding = False
