@@ -803,6 +803,7 @@
 	$: hasDirectToolServerAccess =
 		$_user?.role === 'admin' || ($_user?.permissions?.features?.direct_tool_servers ?? true);
 	$: showTerminalSelector =
+		$config?.features?.enable_tool_servers &&
 		terminalCapableModels.length > 0 &&
 		(($terminalServers ?? []).some((t) => t.id) ||
 			(hasDirectToolServerAccess &&
@@ -2330,8 +2331,10 @@
 											onClose={async () => {
 												await tick();
 
-												const chatInput = document.getElementById('chat-input');
-												chatInput?.focus();
+												if (!$mobile) {
+													const chatInput = document.getElementById('chat-input');
+													chatInput?.focus();
+												}
 											}}
 										>
 											<button
