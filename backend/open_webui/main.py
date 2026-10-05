@@ -147,6 +147,7 @@ from open_webui.models.config import Config
 from open_webui.models.functions import Functions
 from open_webui.models.messages import Messages
 from open_webui.models.models import Models, normalize_model_tags
+from open_webui.models.groups import Groups, resolve_group_default_models
 from open_webui.models.users import Users
 from open_webui.routers import (
     analytics,
@@ -165,6 +166,7 @@ from open_webui.routers import (
     images,
     knowledge,
     memories,
+    mfa,
     models,
     notes,
     notifications,
@@ -193,6 +195,7 @@ from open_webui.socket.main import (
     get_models_in_use,
     get_user_id_from_session_pool,
     periodic_session_pool_cleanup,
+    periodic_socket_authentication,
     periodic_usage_pool_cleanup,
     redis_event_listener,
     sio,
@@ -371,6 +374,9 @@ async def lifespan(app: FastAPI):
 
     await import_legacy_config_json()
     await seed_registered_defaults()
+    from open_webui.utils.mfa import validate_mfa_configuration
+
+    await validate_mfa_configuration()
     await initialize_runtime_config(app)
     await migrate_legacy_webhook_config()
     await publish_event(app, EVENTS.SYSTEM_STARTUP_STARTED, source='system')
@@ -406,6 +412,7 @@ async def lifespan(app: FastAPI):
         sio.manager_initialized = True
         sio.manager.initialize()
 
+    app.state.periodic_socket_authentication = asyncio.create_task(periodic_socket_authentication())
     app.state.periodic_usage_pool_cleanup = asyncio.create_task(periodic_usage_pool_cleanup())
     app.state.periodic_session_pool_cleanup = asyncio.create_task(periodic_session_pool_cleanup())
 
@@ -500,6 +507,7 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, 'redis_event_listener'):
         app.state.redis_event_listener.cancel()
 
+    app.state.periodic_socket_authentication.cancel()
     app.state.periodic_usage_pool_cleanup.cancel()
     app.state.periodic_session_pool_cleanup.cancel()
     app.state.scheduler_worker_loop.cancel()
@@ -863,6 +871,7 @@ app.include_router(retrieval.router, prefix='/api/v1/retrieval', tags=['retrieva
 app.include_router(configs.router, prefix='/api/v1/configs', tags=['configs'])
 
 app.include_router(auths.router, prefix='/api/v1/auths', tags=['auths'])
+app.include_router(mfa.router, prefix='/api/v1/auths/mfa', tags=['auths'])
 app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 
 
@@ -2269,6 +2278,24 @@ async def get_app_config(request: Request):
         if data is not None and 'id' in data and await is_valid_token(data, request.app.state.redis):
             user = await Users.get_user_by_id(data['id'])
 
+    group_defaults = None
+    if user is not None and user.role in ('admin', 'user'):
+        group_defaults, _ = resolve_group_default_models(
+            await Groups.get_groups_by_member_id(user.id, include_inherited=True)
+        )
+        if group_defaults:
+            try:
+                models = (await get_models(request, user=user))['data']
+                available = {
+                    model['id']
+                    for model in models
+                    if not ((model.get('info') or {}).get('meta') or {}).get('hidden', False)
+                }
+                group_defaults = [model_id for model_id in group_defaults if model_id in available]
+            except Exception:
+                log.exception('Unable to resolve available group default models')
+                group_defaults = None
+
     onboarding = False
     if user is None:
         onboarding = not await Users.has_users()
@@ -2417,7 +2444,7 @@ async def get_app_config(request: Request):
         },
         **(
             {
-                'default_models': config.get('ui.default_models'),
+                'default_models': ','.join(group_defaults) if group_defaults else config.get('ui.default_models'),
                 'default_pinned_models': config.get('ui.default_pinned_models'),
                 'default_prompt_suggestions': config.get('ui.prompt_suggestions'),
                 'default_prompt_suggestions_i18n': config.get('ui.prompt_suggestions_i18n'),

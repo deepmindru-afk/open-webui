@@ -53,6 +53,7 @@
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import {
+		resolveDefaultModelIds,
 		convertMessagesToHistory,
 		copyToClipboard,
 		getMessageContentParts,
@@ -106,7 +107,6 @@
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { getFunctions } from '$lib/apis/functions';
 	import { initiateOAuthRedirect } from '$lib/apis/configs';
-	import { updateFolderById } from '$lib/apis/folders';
 
 	import Banner from '../common/Banner.svelte';
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
@@ -197,28 +197,14 @@
 	let serverContextUsage = null;
 	let contextUsage = null;
 
-	const getAvailableModelIds = () =>
-		$models.filter((m) => !(m?.info?.meta?.hidden ?? false)).map((m) => m.id);
-	const getDefaultModelIds = () =>
-		$config?.default_models ? $config.default_models.split(',') : [];
 	const normalizeSelectedModels = (modelIds: string[] = []) => {
-		const availableModels = getAvailableModelIds();
-		const defaultModels = getDefaultModelIds();
-		let normalized = (modelIds ?? []).filter(
-			(modelId) => modelId && availableModels.includes(modelId)
+		const selected = resolveDefaultModelIds(
+			$models,
+			modelIds,
+			$settings?.models,
+			$config?.default_models?.split(',')
 		);
-
-		if (normalized.length === 0 && $settings?.models?.length) {
-			normalized = $settings.models.filter((modelId) => availableModels.includes(modelId));
-		}
-		if (normalized.length === 0 && defaultModels.length > 0) {
-			normalized = defaultModels.filter((modelId) => availableModels.includes(modelId));
-		}
-		if (normalized.length === 0) {
-			normalized = availableModels.length > 0 ? [availableModels[0]] : [''];
-		}
-
-		return normalized;
+		return selected.length ? selected : [''];
 	};
 
 	$: {
@@ -1548,24 +1534,6 @@
 		}
 	};
 
-	const savedModelIds = async () => {
-		if (
-			$selectedFolder &&
-			selectedModels.filter((modelId) => modelId !== '').length > 0 &&
-			!equal($selectedFolder?.data?.model_ids, selectedModels)
-		) {
-			const res = await updateFolderById(localStorage.token, $selectedFolder.id, {
-				data: {
-					model_ids: selectedModels
-				}
-			});
-		}
-	};
-
-	$: if (selectedModels !== null) {
-		savedModelIds();
-	}
-
 	const stopAudio = () => {
 		try {
 			speechSynthesis.cancel();
@@ -1646,14 +1614,11 @@
 		const selectedFolderSubscribe = selectedFolder.subscribe(async (folder) => {
 			await tick();
 			// Folder default models apply to new chats only.
-			if (
-				!history.currentId &&
-				folder?.data?.model_ids &&
-				!equal(selectedModels, folder.data.model_ids)
-			) {
-				selectedModels = folder.data.model_ids;
-
-				console.log('Set selectedModels from folder data:', selectedModels);
+			if (!history.currentId && folder) {
+				const folderModels = normalizeSelectedModels(folder.data?.model_ids ?? []);
+				if (!equal(selectedModels, folderModels)) {
+					selectedModels = folderModels;
+				}
 			}
 		});
 
@@ -2119,7 +2084,7 @@
 			.filter((m) => !(m?.info?.meta?.hidden ?? false))
 			.map((m) => m.id);
 
-		const defaultModels = $config?.default_models ? $config?.default_models.split(',') : [];
+		const defaultModels = normalizeSelectedModels();
 
 		const openModelSelectorWithSearch = async (modelId: string) => {
 			const modelSelectorButton = document.getElementById('model-selector-model-button');
@@ -2162,9 +2127,9 @@
 				$models.map((m) => m.id).includes(modelId)
 			);
 		} else {
-			if ($selectedFolder?.data?.model_ids) {
-				// Set from folder model IDs
-				selectedModels = $selectedFolder?.data?.model_ids;
+			if ($selectedFolder) {
+				// Folder defaults are explicit; never inherit a previous chat's selection.
+				selectedModels = normalizeSelectedModels($selectedFolder.data?.model_ids ?? []);
 			} else {
 				if (sessionStorage.selectedModels) {
 					// Set from session storage (temporary selection)
@@ -2182,7 +2147,7 @@
 			}
 
 			// Unavailable & hidden models filtering
-			selectedModels = selectedModels.filter((modelId) => availableModels.includes(modelId));
+			selectedModels = normalizeSelectedModels(selectedModels);
 		}
 
 		// Ensure at least one model is selected

@@ -336,12 +336,27 @@ def get_user_id_from_session_pool(sid):
     return None
 
 
+LOCAL_AUTHENTICATED_SIDS: set[str] = set()
+
+
+async def periodic_socket_authentication():
+    while True:
+        await asyncio.sleep(30)
+        for sid in tuple(LOCAL_AUTHENTICATED_SIDS):
+            await get_socket_session_user(sid)
+
+
 async def get_socket_session_user(sid: str) -> dict | None:
     """Session user from this worker's local Socket.IO store; only locally connected sids are ever looked up."""
     try:
-        return (await sio.get_session(sid)).get('user')
-    except KeyError:
-        return None
+        session = await sio.get_session(sid)
+        if session.get('user') and await get_verified_user_by_token(session.get('token', ''), REDIS):
+            return session['user']
+    except Exception:
+        log.debug('Socket authentication expired for %s', sid)
+    LOCAL_AUTHENTICATED_SIDS.discard(sid)
+    await sio.disconnect(sid)
+    return None
 
 
 def get_session_ids_from_room(room):
@@ -419,7 +434,7 @@ async def leave_room_for_users(room: str, user_ids: list[str]):
             log.debug('Failed to make session %s leave room %s: %s', sid, room, e)
 
 
-async def disconnect_user_sessions(user_id: str):
+async def disconnect_user_sessions(user_id: str, *, refresh_access: bool = False):
     """Disconnect all Socket.IO sessions belonging to a user.
 
     Call this when a user's role is changed or the user is deleted so that
@@ -429,6 +444,11 @@ async def disconnect_user_sessions(user_id: str):
     """
     session_ids = get_session_ids_by_user_id(user_id)
     for sid in session_ids:
+        if refresh_access:
+            try:
+                await sio.emit('access:updated', {}, to=sid)
+            except Exception:
+                log.exception('Failed to notify session %s about changed access', sid)
         try:
             await sio.disconnect(sid)
         except Exception:
@@ -475,7 +495,8 @@ async def connect(sid, environ, auth):
                 'last_seen_at': int(time.time()),
             }
             SESSION_POOL[sid] = socket_user
-            await sio.save_session(sid, {'user': socket_user})
+            await sio.save_session(sid, {'user': socket_user, 'token': auth['token']})
+            LOCAL_AUTHENTICATED_SIDS.add(sid)
             await sio.enter_room(sid, f'user:{user.id}')
 
 
@@ -507,7 +528,8 @@ async def user_join(sid, data):
     }
 
     SESSION_POOL[sid] = socket_user
-    await sio.save_session(sid, {'user': socket_user})
+    await sio.save_session(sid, {'user': socket_user, 'token': auth['token']})
+    LOCAL_AUTHENTICATED_SIDS.add(sid)
     await sio.enter_room(sid, f'user:{user.id}')
 
     # Join all the channels only if user has channels permission
@@ -986,6 +1008,7 @@ async def yjs_awareness_update(sid, data):
 
 @sio.event
 async def disconnect(sid, reason=None):
+    LOCAL_AUTHENTICATED_SIDS.discard(sid)
     if sid in SESSION_POOL:
         del SESSION_POOL[sid]
 

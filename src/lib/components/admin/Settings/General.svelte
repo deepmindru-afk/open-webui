@@ -88,6 +88,11 @@
 				I18N: cleaned
 			});
 			if (!res) throw new Error($i18n.t('Failed to update settings'));
+			if (res.sessions_revoked) {
+				localStorage.removeItem('token');
+				window.location.href = '/auth?state=logout&form=signin';
+				return;
+			}
 			await updateI18n(res.I18N ?? cleaned);
 			await updateBanners();
 			await config.set(await getBackendConfig());
@@ -270,6 +275,7 @@
 					{/if}
 				</div>
 			</AdminSettingSection>
+
 
 			<AdminSettingSection title={$i18n.t('settings.admin.general.sections.features.title')}>
 				<AdminSettingRow
