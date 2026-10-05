@@ -157,19 +157,19 @@
 	$: adminSettingGroups = {
 		'admin:general': $i18n.t('System'),
 		'admin:authentication': $i18n.t('System'),
+		'admin:interface': $i18n.t('System'),
 		'admin:connections': $i18n.t('AI'),
 		'admin:models': $i18n.t('AI'),
 		'admin:subagents': $i18n.t('AI'),
-		'admin:evaluations': $i18n.t('Quality'),
-		'admin:analytics': $i18n.t('Quality'),
 		'admin:integrations': $i18n.t('Tools'),
 		'admin:documents': $i18n.t('Tools'),
+		'admin:audio': $i18n.t('Tools'),
+		'admin:images': $i18n.t('Tools'),
 		'admin:web': $i18n.t('Tools'),
 		'admin:code-execution': $i18n.t('Tools'),
 		'admin:pipelines': $i18n.t('Tools'),
-		'admin:interface': $i18n.t('Experience'),
-		'admin:audio': $i18n.t('Experience'),
-		'admin:images': $i18n.t('Experience'),
+		'admin:evaluations': $i18n.t('Quality'),
+		'admin:analytics': $i18n.t('Quality'),
 		'admin:db': $i18n.t('Data')
 	};
 	const settingGroupTitle = (tabId: string) =>
@@ -278,6 +278,12 @@
 			searchPrefixes: ['settings.admin.authentication.']
 		},
 		{
+			id: 'admin:interface',
+			titleKey: 'settings.admin.interface.title',
+			title: $i18n.t('settings.admin.interface.title'),
+			searchPrefixes: ['settings.admin.interface.', 'settings.personal.general.parameters.']
+		},
+		{
 			id: 'admin:connections',
 			titleKey: 'settings.admin.connections.title',
 			title: $i18n.t('settings.admin.connections.title'),
@@ -296,10 +302,16 @@
 			searchPrefixes: ['settings.admin.subagents.']
 		},
 		{
-			id: 'admin:interface',
-			titleKey: 'settings.admin.interface.title',
-			title: $i18n.t('settings.admin.interface.title'),
-			searchPrefixes: ['settings.admin.interface.', 'settings.personal.general.parameters.']
+			id: 'admin:integrations',
+			titleKey: 'settings.admin.integrations.title',
+			title: $i18n.t('settings.admin.integrations.title'),
+			searchPrefixes: ['settings.admin.integrations.']
+		},
+		{
+			id: 'admin:documents',
+			titleKey: 'settings.admin.documents.title',
+			title: $i18n.t('settings.admin.documents.title'),
+			searchPrefixes: ['settings.admin.documents.']
 		},
 		{
 			id: 'admin:audio',
@@ -312,30 +324,6 @@
 			titleKey: 'settings.admin.images.title',
 			title: $i18n.t('settings.admin.images.title'),
 			searchPrefixes: ['settings.admin.images.']
-		},
-		{
-			id: 'admin:evaluations',
-			titleKey: 'settings.admin.evaluations.title',
-			title: $i18n.t('settings.admin.evaluations.title'),
-			searchPrefixes: ['settings.admin.evaluations.']
-		},
-		{
-			id: 'admin:analytics',
-			titleKey: 'settings.admin.analytics.title',
-			title: $i18n.t('settings.admin.analytics.title'),
-			searchPrefixes: ['settings.admin.analytics.']
-		},
-		{
-			id: 'admin:integrations',
-			titleKey: 'settings.admin.integrations.title',
-			title: $i18n.t('settings.admin.integrations.title'),
-			searchPrefixes: ['settings.admin.integrations.']
-		},
-		{
-			id: 'admin:documents',
-			titleKey: 'settings.admin.documents.title',
-			title: $i18n.t('settings.admin.documents.title'),
-			searchPrefixes: ['settings.admin.documents.']
 		},
 		{
 			id: 'admin:web',
@@ -354,6 +342,18 @@
 			titleKey: 'settings.admin.pipelines.title',
 			title: $i18n.t('settings.admin.pipelines.title'),
 			searchPrefixes: ['settings.admin.pipelines.']
+		},
+		{
+			id: 'admin:evaluations',
+			titleKey: 'settings.admin.evaluations.title',
+			title: $i18n.t('settings.admin.evaluations.title'),
+			searchPrefixes: ['settings.admin.evaluations.']
+		},
+		{
+			id: 'admin:analytics',
+			titleKey: 'settings.admin.analytics.title',
+			title: $i18n.t('settings.admin.analytics.title'),
+			searchPrefixes: ['settings.admin.analytics.']
 		},
 		{
 			id: 'admin:db',
