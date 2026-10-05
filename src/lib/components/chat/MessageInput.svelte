@@ -473,7 +473,11 @@
 			let next = total + 4 + estimateTokens(message.content);
 			next += estimateTokens(message.output);
 			next += estimateTokens(message.tool_calls);
-			next += estimateTokens(message.files);
+			if (message.files?.length) {
+				next += estimateTokens(
+					JSON.stringify(message.files).replace(/data:[\w/+.;=%-]*;base64,[A-Za-z0-9+/=]*/g, '')
+				);
+			}
 			return next;
 		}, 0);
 
@@ -2159,7 +2163,9 @@
 																// either when Enter is pressed or when Ctrl+Enter is pressed.
 																const enterPressed =
 																	($settings?.ctrlEnterToSend ?? false)
-																		? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
+																		? (e.key === 'Enter' || e.keyCode === 13) &&
+																			isCtrlPressed &&
+																			!e.shiftKey
 																		: (e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey;
 
 																if (enterPressed) {
