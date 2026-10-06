@@ -38,6 +38,7 @@
 	let TTS_ENGINE = '';
 	let TTS_MODEL = '';
 	let TTS_VOICE = '';
+	let REALTIME_TTS_PROMPT_TEMPLATE = '';
 	let TTS_OPENAI_PARAMS = '';
 	let TTS_SPLIT_ON: TTS_RESPONSE_SPLIT = TTS_RESPONSE_SPLIT.PUNCTUATION;
 	let TTS_AZURE_SPEECH_REGION = '';
@@ -152,6 +153,7 @@
 				ENGINE: TTS_ENGINE,
 				MODEL: TTS_MODEL,
 				VOICE: TTS_VOICE,
+				REALTIME_TTS_PROMPT_TEMPLATE: REALTIME_TTS_PROMPT_TEMPLATE || null,
 				AZURE_SPEECH_REGION: TTS_AZURE_SPEECH_REGION,
 				AZURE_SPEECH_BASE_URL: TTS_AZURE_SPEECH_BASE_URL,
 				AZURE_SPEECH_OUTPUT_FORMAT: TTS_AZURE_SPEECH_OUTPUT_FORMAT,
@@ -204,6 +206,7 @@
 			TTS_ENGINE = res.tts.ENGINE;
 			TTS_MODEL = res.tts.MODEL;
 			TTS_VOICE = res.tts.VOICE;
+			REALTIME_TTS_PROMPT_TEMPLATE = res.tts.REALTIME_TTS_PROMPT_TEMPLATE ?? '';
 
 			TTS_SPLIT_ON = res.tts.SPLIT_ON || TTS_RESPONSE_SPLIT.PUNCTUATION;
 
@@ -495,6 +498,9 @@
 						if (value === 'openai') {
 							TTS_VOICE = 'alloy';
 							TTS_MODEL = 'tts-1';
+						} else if (value === 'openai-realtime') {
+							TTS_VOICE = 'marin';
+							TTS_MODEL = 'gpt-realtime-2.1-mini';
 						} else if (value === 'mistral') {
 							TTS_VOICE = '';
 							TTS_MODEL = 'voxtral-mini-tts-2603';
@@ -513,13 +519,14 @@
 						>{$i18n.t('Transformers')} ({$i18n.t('Local')})</option
 					>
 					<option value="openai">{$i18n.t('OpenAI')}</option>
+					<option value="openai-realtime">{$i18n.t('OpenAI Realtime')}</option>
 					<option value="elevenlabs">{$i18n.t('ElevenLabs')}</option>
 					<option value="azure">{$i18n.t('Azure AI Speech')}</option>
 					<option value="mistral">{$i18n.t('MistralAI')}</option>
 				</SettingsSelect>
 			</AdminSettingRow>
 
-			{#if TTS_ENGINE === 'openai'}
+			{#if TTS_ENGINE === 'openai' || TTS_ENGINE === 'openai-realtime'}
 				<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					<AdminSettingField label={$i18n.t('settings.admin.audio.ttsOpenaiApiBaseUrl.label')}>
 						<input
@@ -633,7 +640,7 @@
 						</a>
 					</div>
 				</AdminSettingField>
-			{:else if TTS_ENGINE === 'openai'}
+			{:else if TTS_ENGINE === 'openai' || TTS_ENGINE === 'openai-realtime'}
 				<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					<AdminSettingField label={$i18n.t('settings.admin.audio.ttsVoice.label')}>
 						<TTSVoiceInput
@@ -652,16 +659,28 @@
 						/>
 					</AdminSettingField>
 				</div>
-				<AdminSettingField
-					label={$i18n.t('settings.admin.audio.additionalParameters.label')}
-					description={$i18n.t('settings.admin.audio.additionalParameters.description')}
-				>
-					<Textarea
-						className={textareaClass}
-						bind:value={TTS_OPENAI_PARAMS}
-						placeholder={$i18n.t('Enter additional parameters in JSON format')}
-					/>
-				</AdminSettingField>
+				{#if TTS_ENGINE === 'openai'}
+					<AdminSettingField
+						label={$i18n.t('settings.admin.audio.additionalParameters.label')}
+						description={$i18n.t('settings.admin.audio.additionalParameters.description')}
+					>
+						<Textarea
+							className={textareaClass}
+							bind:value={TTS_OPENAI_PARAMS}
+							placeholder={$i18n.t('Enter additional parameters in JSON format')}
+						/>
+					</AdminSettingField>
+				{:else}
+					<AdminSettingField label={$i18n.t('Prompt Template')}>
+						<Textarea
+							className={textareaClass}
+							bind:value={REALTIME_TTS_PROMPT_TEMPLATE}
+							placeholder={$i18n.t(
+								'Leave empty to use the default prompt, or enter a custom prompt'
+							)}
+						/>
+					</AdminSettingField>
+				{/if}
 			{:else if TTS_ENGINE === 'elevenlabs' || TTS_ENGINE === 'mistral'}
 				<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					<AdminSettingField label={$i18n.t('settings.admin.audio.ttsVoice.label')}>
