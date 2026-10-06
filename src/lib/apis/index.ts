@@ -1781,6 +1781,7 @@ export interface ModelConfig {
 }
 
 export interface ModelMeta {
+	voice?: { voice?: string };
 	toolIds: never[];
 	description?: string;
 	i18n?: Record<string, Record<string, any>>;
@@ -1791,6 +1792,7 @@ export interface ModelMeta {
 }
 
 export interface ModelControl {
+	display?: 'menu' | 'slider';
 	label: string;
 	description?: string;
 	default?: string | null;
