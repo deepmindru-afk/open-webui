@@ -3636,6 +3636,7 @@
 				params: {
 					...$settings?.params,
 					...params,
+					model_controls: $settings?.params?.model_controls ?? {},
 					stop: getStopTokens()
 				},
 
