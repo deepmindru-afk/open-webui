@@ -1,4 +1,6 @@
 <script lang="ts">
+	import WorkspaceAccessModal from './common/WorkspaceAccessModal.svelte';
+	let accessModal: WorkspaceAccessModal;
 	import dayjs from 'dayjs';
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	import { toast } from 'svelte-sonner';
@@ -506,6 +508,8 @@
 	});
 </script>
 
+<WorkspaceAccessModal bind:this={accessModal} resourceType="models" onUpdated={getModelList} />
+
 <svelte:head>
 	<!-- LICENSE covers this Open WebUI browser-title identifier.
 	Do not alter, remove, obscure, or replace it except as LICENSE permits:
@@ -717,7 +721,7 @@
 		{#if models !== null}
 			{#if (models ?? []).length !== 0}
 				<div class="my-1" id="model-list">
-					<div class="flex items-center gap-3 px-2 pb-0.5 text-xs text-gray-400 dark:text-gray-500">
+					<div class="flex items-center gap-3 px-2 pb-1 text-xs text-gray-400 dark:text-gray-500">
 						<span>{$i18n.t('Sort by')}</span>
 						<button
 							class="flex items-center gap-1 py-0.5"
@@ -832,11 +836,15 @@
 												</div>
 
 												<Tooltip
-													content={dayjs(model.updated_at * 1000).format('LLLL')}
+													content={dayjs(model.updated_at * 1000)
+														.locale($i18n.language)
+														.format('LLLL')}
 													className="hidden shrink-0 sm:flex"
 												>
 													<span class="text-[0.6875rem] leading-5 text-gray-400 dark:text-gray-500"
-														>{dayjs(model.updated_at * 1000).fromNow()}</span
+														>{dayjs(model.updated_at * 1000)
+															.locale($i18n.language)
+															.fromNow()}</span
 													>
 												</Tooltip>
 
@@ -920,6 +928,7 @@
 									{:else}
 										<div class="flex shrink-0 flex-row items-center gap-1 self-center">
 											<ModelMenu
+												accessHandler={() => accessModal.open(model.id)}
 												user={$user}
 												{model}
 												writeAccess={model.write_access}
