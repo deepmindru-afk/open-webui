@@ -71,7 +71,11 @@
 	import { AudioQueue } from '$lib/utils/audio';
 	import { RealtimeCall, getBridgeTurnState, type BridgeSubmission } from '$lib/utils/realtime';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
-	import { applyResponseStreamEvent, getOutputText } from './Messages/structuredOutput';
+	import {
+		applyResponseStreamEvent,
+		getOutputText,
+		setOutputText
+	} from './Messages/structuredOutput';
 
 	import {
 		archiveChatById,
@@ -116,6 +120,7 @@
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
 	import EventConfirmDialog from '../common/ConfirmDialog.svelte';
+	import ElicitationDialog from './ElicitationDialog.svelte';
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
 	import Placeholder from './Placeholder.svelte';
@@ -173,10 +178,29 @@
 	let eventConfirmationInputType = '';
 	let eventConfirmationInputOptions: ({ label?: string; value: string } | string)[] = [];
 	let eventCallback: (value: any) => void = () => {};
-	let showAskUserDialog = false;
-	let askUserQuestions: any[] = [];
-	let askUserAllowOther = true;
-	let askUserTimeoutMs: number | null = null;
+	type BrowserInteraction = {
+		id: string;
+		messageId: string;
+		type: string;
+		data: any;
+		callback: (value: any) => void;
+	};
+	let browserInteractions: BrowserInteraction[] = [];
+	let browserApprovalMode: string | null = null;
+	$: browserInteraction = browserInteractions[0];
+
+	const resolveBrowserInteraction = (interaction: BrowserInteraction, value: any) => {
+		if (!browserInteractions.includes(interaction)) return;
+		browserInteractions = browserInteractions.filter((item) => item !== interaction);
+		interaction.callback(value);
+	};
+
+	const cancelBrowserInteractions = () => {
+		browserApprovalMode = null;
+		for (const interaction of browserInteractions) {
+			resolveBrowserInteraction(interaction, { status: 'cancelled', answers: {} });
+		}
+	};
 
 	let selectedModels = [''];
 	let selectedModelIdx = 0;
@@ -381,9 +405,9 @@
 	let chat: any = null;
 	let tags = [];
 
-	// Read-only when viewing someone else's chat (e.g. via shared folder access)
-	$: readOnly = chat != null && chat.user_id !== $user?.id;
-	$: canClone = readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true));
+	// Non-owners may reply when the sharing mode allows it, but cannot save chat edits.
+	$: isShared = chat != null && chat.user_id !== $user?.id;
+	$: canClone = isShared && ($user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true));
 	let cloning = false;
 
 	const cloneSharedChat = async () => {
@@ -424,7 +448,7 @@
 		});
 	};
 
-	$: if (readOnly && chat?.user_id) {
+	$: if (isShared && chat?.user_id) {
 		void resolveChatOwner(chat.user_id);
 	} else {
 		chatOwner = null;
@@ -457,6 +481,7 @@
 
 	const handleToolApprovalModeChange = async (mode: string) => {
 		const tool_approval_mode = mode === 'ask' ? 'ask' : 'full';
+		browserApprovalMode = tool_approval_mode;
 		params = {
 			...params,
 			tool_approval_mode
@@ -475,7 +500,7 @@
 			}
 		);
 
-		if (!readOnly && $chatId && !$temporaryChatEnabled && !isTemporaryChatId($chatId)) {
+		if (!isShared && $chatId && !$temporaryChatEnabled && !isTemporaryChatId($chatId)) {
 			const res = await updateChatById(localStorage.token, $chatId, { params }).catch((err) => {
 				console.error('[tool permissions chat]', err);
 				return null;
@@ -484,6 +509,13 @@
 		}
 
 		if (tool_approval_mode === 'full') {
+			if (isTemporaryChatId($chatId)) {
+				if (browserApprovalMode !== 'full') return;
+				for (const interaction of browserInteractions) {
+					if (interaction.data?.tool_call) resolveBrowserInteraction(interaction, true);
+				}
+				return;
+			}
 			const messages = [...Object.values(history?.messages ?? {})].reverse() as any[];
 			for (const message of messages) {
 				if ((message.user_id ?? chat?.user_id ?? $user?.id) !== $user?.id) continue;
@@ -645,20 +677,16 @@
 			}
 		: null;
 
-	$: socketAskUserPrompt = {
-		show: showAskUserDialog,
-		questions: askUserQuestions,
-		allowOther: askUserAllowOther,
-		timeoutMs: askUserTimeoutMs,
-		onConfirm: (value) => {
-			showAskUserDialog = false;
-			eventCallback(value);
-		},
-		onCancel: () => {
-			showAskUserDialog = false;
-			eventCallback({ status: 'cancelled', answers: {} });
-		}
-	};
+	$: socketAskUserPrompt = ((interaction: BrowserInteraction | undefined) => ({
+		id: interaction?.id,
+		show: interaction?.type === 'request:user_input',
+		questions: interaction?.data?.questions ?? [],
+		allowOther: interaction?.data?.allow_other ?? true,
+		timeoutMs: interaction?.data?.timeout_ms ?? null,
+		onConfirm: (value: any) => interaction && resolveBrowserInteraction(interaction, value),
+		onCancel: () =>
+			interaction && resolveBrowserInteraction(interaction, { status: 'cancelled', answers: {} })
+	}))(browserInteraction);
 
 	const mergeChatVariableSchemas = (modelIds = [], availableModels = []) => {
 		const byKey: Record<string, any> = {};
@@ -736,7 +764,7 @@
 
 	const saveChatVariables = async (values) => {
 		chatVariables = { ...chatVariables, ...values };
-		if (readOnly) return;
+		if (isShared) return;
 
 		if ($chatId && !$temporaryChatEnabled && !isTemporaryChatId($chatId)) {
 			const res = await updateChatById(localStorage.token, $chatId, {}, chatVariables).catch(
@@ -836,6 +864,7 @@
 	}
 
 	const navigateHandler = async () => {
+		cancelBrowserInteractions();
 		bridge?.end();
 		noteChatDebug('navigateHandler start');
 		// Mark the outgoing chat as read before loading the new one.
@@ -1271,7 +1300,7 @@
 
 	const emitTyping = (typing: boolean) => {
 		if (!$socket?.connected || !joinedChatId) return;
-		if (typing && (joinedChatId !== $chatId || (readOnly && chat?.chat?.share_mode !== 'continue')))
+		if (typing && (joinedChatId !== $chatId || (isShared && chat?.chat?.share_mode !== 'continue')))
 			return;
 		if (typing ? Date.now() - lastTypingEmit < 2000 : !lastTypingEmit) return;
 		lastTypingEmit = typing ? Date.now() : 0;
@@ -1378,6 +1407,44 @@
 	const chatEventHandler = async (event, cb) => {
 		console.log(event);
 		if (event.shared && event.user_id === $user?.id && event.data?.type !== 'chat:messages') return;
+		const interactionType = event?.data?.type;
+		const interactionData = event?.data?.data;
+		if (interactionType === 'request:interaction:done') {
+			browserInteractions = browserInteractions.filter(
+				(item) => item.id !== interactionData?.interaction_id
+			);
+			return;
+		}
+		if (
+			interactionType === 'request:user_input' ||
+			interactionType === 'request:elicitation' ||
+			(interactionType === 'confirmation' && interactionData?.tool_call)
+		) {
+			if (!cb) return;
+			if (event.chat_id !== $chatId || !history.messages[event.message_id]) {
+				cb({ status: 'cancelled', answers: {} });
+				return;
+			}
+			if (
+				interactionData?.tool_call &&
+				isTemporaryChatId(event.chat_id) &&
+				browserApprovalMode === 'full'
+			) {
+				cb(true);
+				return;
+			}
+			browserInteractions = [
+				...browserInteractions,
+				{
+					id: interactionData?.interaction_id ?? uuidv4(),
+					messageId: event.message_id,
+					type: interactionType,
+					data: interactionData,
+					callback: cb
+				}
+			];
+			return;
+		}
 
 		// A new chat's title can arrive before its id; the response message already exists.
 		if (
@@ -1391,7 +1458,7 @@
 				if (
 					!sender?.id ||
 					sender.id === $user?.id ||
-					(readOnly && chat?.chat?.share_mode !== 'continue')
+					(isShared && chat?.chat?.share_mode !== 'continue')
 				)
 					return;
 				if (event.data.data?.typing) {
@@ -1462,6 +1529,11 @@
 					}
 					autoScrollToBottom();
 				} else if (type === 'chat:tasks:cancel') {
+					for (const interaction of browserInteractions) {
+						if (interaction.messageId === event.message_id) {
+							resolveBrowserInteraction(interaction, { status: 'cancelled', answers: {} });
+						}
+					}
 					message.bridgeCancelled = true;
 					bridgeCancellations.get(event.message_id)?.();
 					if (!event.shared) dismissContextCompactionToast();
@@ -1474,6 +1546,7 @@
 						for (const messageId of history.messages[message.parentId].childrenIds) {
 							history.messages[messageId].done = true;
 						}
+						message.done = true;
 						await processNextInQueue($chatId);
 					} else {
 						message.done = true;
@@ -1545,9 +1618,11 @@
 						await onEmbeddedChatTitle?.($chatId, data);
 					}
 					await refreshChatList(localStorage.token);
+					return; // The message copy is stale after the await; skip the trailing write-back.
 				} else if (type === 'chat:tags') {
 					chat = await getChatById(localStorage.token, $chatId);
 					allTags.set(await getAllTags(localStorage.token));
+					return;
 				} else if (type === 'source' || type === 'citation') {
 					if (data?.type === 'code_execution') {
 						// Code execution; update existing code execution by ID, or add new one.
@@ -1622,13 +1697,6 @@
 					eventConfirmationInputValue = data?.value ?? '';
 					eventConfirmationInputType = data?.input?.type ?? data?.type ?? '';
 					eventConfirmationInputOptions = data?.input?.options ?? data?.options ?? [];
-				} else if (type === 'request:user_input') {
-					eventCallback = cb;
-					askUserQuestions = data?.questions ?? [];
-					askUserAllowOther = data?.allow_other ?? true;
-					askUserTimeoutMs =
-						typeof data?.timeout_ms === 'number' && data.timeout_ms > 0 ? data.timeout_ms : null;
-					showAskUserDialog = true;
 				} else if (type.startsWith('terminal:')) {
 					terminalEventHandler(type, data);
 				} else {
@@ -1744,7 +1812,13 @@
 		syncChatRoom($socket, $chatId, $temporaryChatEnabled);
 		const id = $chatId;
 		const tasks = await getTaskIdsByChatId(localStorage.token, id).catch(() => null);
-		if ($chatId === id && tasks) taskIds = tasks.task_ids?.length ? tasks.task_ids : null;
+		if ($chatId !== id || !tasks) return;
+		taskIds = tasks.task_ids?.length ? tasks.task_ids : null;
+		if (!taskIds && hasPendingAssistantLeaf()) {
+			// A server restart can leave unfinished messages without a completion event.
+			const loaded = await loadChat();
+			if (loaded && $chatId === id) await processNextInQueue(id);
+		}
 	};
 
 	onMount(() => {
@@ -1754,6 +1828,7 @@
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 		$socket?.on('disconnect', clearTyping);
+		$socket?.on('disconnect', cancelBrowserInteractions);
 
 		$audioQueue?.destroy();
 
@@ -1835,6 +1910,7 @@
 
 		return () => {
 			try {
+				cancelBrowserInteractions();
 				clearTimeout(saveControlsTimer);
 				saveControls();
 				if (chatIdProp && !$temporaryChatEnabled) {
@@ -1859,6 +1935,7 @@
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				$socket?.off('disconnect', clearTyping);
+				$socket?.off('disconnect', cancelBrowserInteractions);
 				dismissContextCompactionToast();
 				audioQueueInstance?.destroy();
 				audioQueue.set(null);
@@ -2395,6 +2472,7 @@
 	};
 
 	const initNewChat = async () => {
+		cancelBrowserInteractions();
 		bridge?.end();
 		console.log('initNewChat');
 		resetWebSearchConfirmation();
@@ -2789,6 +2867,7 @@
 								!messageHasPendingAskUser(message)
 							) {
 								message.done = true;
+								history = history;
 							}
 						}
 					}
@@ -2999,6 +3078,9 @@
 					...(history.messages[message.id].content !== message.content
 						? { originalContent: history.messages[message.id].content }
 						: {}),
+					...(typeof message.content === 'string' && history.messages[message.id].output?.length
+						? { output: setOutputText(history.messages[message.id].output, message.content) }
+						: {}),
 					...message
 				};
 			}
@@ -3030,6 +3112,7 @@
 	};
 
 	const createMessagePair = async (userPrompt) => {
+		if (isShared) return;
 		messageInput?.setText('');
 		if (selectedModels.length === 0) {
 			toast.error($i18n.t('Model not selected'));
@@ -4029,7 +4112,7 @@
 				...(messages.length > 0 ? { messages } : {}),
 				params: {
 					...$settings?.params,
-					...params,
+					...Object.fromEntries(Object.entries(params).filter(([, value]) => value !== null)),
 					model_controls: $settings?.params?.model_controls ?? {},
 					stop: getStopTokens()
 				},
@@ -4189,6 +4272,7 @@
 		const responseMessage = messageId ? history.messages[messageId] : null;
 		if (responseMessage && (responseMessage.user_id ?? chat?.user_id ?? $user?.id) !== $user?.id)
 			return;
+		cancelBrowserInteractions();
 		if (bridge?.connected && responseMessage) responseMessage.bridgeStopping = true;
 		const hasTaskIds = (taskIds?.length ?? 0) > 0;
 		const hasPendingAssistantResponse =
@@ -4217,10 +4301,6 @@
 				for (const messageId of history.messages[responseMessage.parentId].childrenIds) {
 					history.messages[messageId].done = true;
 				}
-			}
-
-			if (responseMessage) {
-				history.messages[responseMessage.id] = responseMessage;
 			}
 
 			if (shouldAutoScrollResponse()) {
@@ -4435,7 +4515,7 @@
 	};
 
 	const saveChatHandler = async (_chatId, history) => {
-		if (readOnly) return;
+		if (isShared) return;
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
 				chat = await updateChatById(localStorage.token, _chatId, {
@@ -4450,7 +4530,7 @@
 	};
 
 	const saveControls = async () => {
-		if (readOnly) return;
+		if (isShared) return;
 		if (!$chatId || $temporaryChatEnabled) return;
 		const loaded = chat?.chat ?? {};
 		if (equal(params, loaded.params ?? {}) && equal(chatFiles, loaded.files ?? [])) return;
@@ -4735,6 +4815,39 @@
 	}}
 />
 
+{#if browserInteraction?.type === 'request:elicitation'}
+	{#key browserInteraction.id}
+		{@const interaction = browserInteraction}
+		<ElicitationDialog
+			data={interaction.data}
+			onResponse={(value) => resolveBrowserInteraction(interaction, value)}
+		/>
+	{/key}
+{/if}
+
+{#if browserInteraction?.data?.tool_call}
+	{#key browserInteraction.id}
+		{@const interaction = browserInteraction}
+		<EventConfirmDialog
+			show={true}
+			title={$i18n.t('Tool Permissions')}
+			confirmLabel={$i18n.t('Allow')}
+			cancelLabel={$i18n.t('Deny')}
+			on:confirm={() => resolveBrowserInteraction(interaction, true)}
+			on:cancel={() => resolveBrowserInteraction(interaction, false)}
+		>
+			<div class="text-sm text-gray-500">
+				<div class="font-medium break-all">{interaction.data.tool_call.name}</div>
+				<pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(
+						interaction.data.tool_call.arguments,
+						null,
+						2
+					)}</pre>
+			</div>
+		</EventConfirmDialog>
+	{/key}
+{/if}
+
 <div
 	class="{embedded
 		? 'h-full'
@@ -4789,7 +4902,7 @@
 					{:else}
 						<Navbar
 							bind:this={navbarElement}
-							{readOnly}
+							readOnly={isShared}
 							chat={{
 								id: $chatId,
 								archived: chat?.archived ?? false,
@@ -4868,7 +4981,7 @@
 										bind:this={messagesRef}
 										chatId={$chatId}
 										user={chatOwner ?? (chat ? { id: chat.user_id } : $user)}
-										{readOnly}
+										readOnly={isShared}
 										shareMode={chat?.chat?.share_mode ?? null}
 										bind:history
 										bind:autoScroll
@@ -4898,13 +5011,13 @@
 								</div>
 							</div>
 
-							{#if readOnly && chat?.chat?.share_mode !== 'continue'}
+							{#if isShared && chat?.chat?.share_mode !== 'continue'}
 								{#if canClone}
 									<div
-										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center bg-linear-to-t from-white dark:from-gray-900 to-transparent pb-5 pt-10"
+										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center gap-2 bg-linear-to-t from-white dark:from-gray-900 to-transparent pb-5 pt-10"
 									>
 										<button
-											class="pointer-events-auto rounded-full bg-black px-3.5 py-1.5 text-xs font-medium text-white transition hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200 disabled:opacity-50"
+											class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white pointer-events-auto"
 											disabled={cloning}
 											on:click={cloneSharedChat}
 										>

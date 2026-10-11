@@ -1,5 +1,6 @@
 """Portable skill snapshots. Paths are virtual; packages are never extracted to disk."""
 
+import asyncio
 import base64
 import io
 import json
@@ -8,7 +9,9 @@ import stat
 import zipfile
 from pathlib import PurePosixPath
 from typing import Literal
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
+import aiohttp
 import yaml
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +19,41 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_SKILL_BYTES = 50 * 1024 * 1024
 MAX_IMPORT_BYTES = 200 * 1024 * 1024
 MAX_FILES = 1000
+SKILL_CONTENT_MAX_CHARS = 100_000
+SKILL_MANIFEST_MAX_ENTRIES = 50
+SKILL_MANIFEST_MAX_CHARS = 5_000
+
+
+def skill_content_page(content: str, offset: int = 0, max_chars: int = SKILL_CONTENT_MAX_CHARS) -> dict:
+    offset = max(0, offset)
+    end = offset + min(SKILL_CONTENT_MAX_CHARS, max(1, max_chars))
+    return {'content': content[offset:end], 'next_offset': end if end < len(content) else None}
+
+
+def bounded_skill_manifest(entries: list, field: str = 'files') -> dict:
+    bounded, size = [], 2  # Include the JSON array brackets and separators in the budget.
+    for entry in entries[:SKILL_MANIFEST_MAX_ENTRIES]:
+        entry_size = len(json.dumps(entry, ensure_ascii=False)) + (2 if bounded else 0)
+        if size + entry_size > SKILL_MANIFEST_MAX_CHARS:
+            break
+        bounded.append(entry)
+        size += entry_size
+    result = {field: bounded}
+    if len(bounded) < len(entries):
+        result['notice'] = 'Additional supporting files omitted.'
+    return result
+
+
+def format_skill_content(page: dict, skill_id: str, tools_enabled: bool) -> str:
+    content = page['content']
+    if page['next_offset'] is not None:
+        content += '\nSkill instructions truncated.'
+        if tools_enabled:
+            content += (
+                f'\nContinue reading with read_skill_file(id={json.dumps(skill_id)}, '
+                f'path="SKILL.md", offset={page["next_offset"]}).'
+            )
+    return content
 
 
 class SkillFile(BaseModel):
@@ -133,7 +171,9 @@ def file_summaries(files: list[dict]) -> list[dict]:
     return [{'path': f['path'], 'size': len(file_bytes(f)), 'encoding': f.get('encoding')} for f in files]
 
 
-def parse_import(data: bytes, filename: str) -> list[dict]:
+def parse_import(
+    data: bytes, filename: str, *, discover_skills: bool = False, directory: str | None = None
+) -> list[dict]:
     if len(data) > MAX_IMPORT_BYTES:
         raise ValueError('Import exceeds 200 MiB')
     if filename.lower().endswith('.json'):
@@ -150,6 +190,10 @@ def parse_import(data: bytes, filename: str) -> list[dict]:
                     raise ValueError('Archives cannot contain links or special files')
                 if info.is_dir():
                     continue
+                if directory is not None:
+                    path = path.partition('/')[2]
+                    if not path.startswith(directory):
+                        continue
                 if path in entries:
                     raise ValueError(f'Duplicate archive path: {path}')
                 total += info.file_size
@@ -162,7 +206,7 @@ def parse_import(data: bytes, filename: str) -> list[dict]:
         if not roots:
             raise ValueError('Archive contains no SKILL.md')
         roots = [root for root in roots if not any(root != parent and root.startswith(parent) for parent in roots)]
-        if any(not any(p.startswith(root) for root in roots) for p in entries):
+        if not discover_skills and any(not any(p.startswith(root) for root in roots) for p in entries):
             raise ValueError('Archive contains files outside skill directories')
         packages = [
             {'files': [encode_file(p[len(root) :], value) for p, value in entries.items() if p.startswith(root)]}
@@ -193,7 +237,7 @@ def parse_import(data: bytes, filename: str) -> list[dict]:
                 'name': str(name),
                 'description': package.get('description', fm.get('description', '')),
                 'meta': package.get('meta') or {},
-                'is_active': package.get('is_active', True),
+                **({'is_active': package['is_active']} if 'is_active' in package else {}),
                 'files': files,
             }
         )
@@ -214,3 +258,72 @@ def zip_export(packages: list[dict]) -> bytes:
             for file in package['files']:
                 archive.writestr(root + '/' + validate_path(file['path']), file_bytes(file))
     return output.getvalue()
+
+
+def skill_import_source(url: str) -> tuple[str, str | None]:
+    parsed = urlsplit(url.strip())
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Use an HTTP(S) URL without embedded credentials')
+    if parsed.hostname.lower() != 'github.com':
+        return url.strip(), None
+    parts = parsed.path.strip('/').split('/')
+    if len(parts) < 2 or any(not re.fullmatch(r'[\w.-]+', part) or part in ('.', '..') for part in parts[:2]):
+        raise ValueError('Invalid GitHub repository URL')
+    owner, repo = parts[:2]
+    repo = repo.removesuffix('.git')
+    if not repo:
+        raise ValueError('Invalid GitHub repository URL')
+    ref, directory = 'HEAD', ''
+    if len(parts) > 2:
+        if parts[2] in ('archive', 'releases', 'raw'):
+            return url.strip(), None
+        if len(parts) < 4 or parts[2] not in ('tree', 'blob'):
+            raise ValueError('Use a GitHub repository, folder, or SKILL.md URL')
+        # shortcut: slash-containing refs must be URL-encoded; use a commit permalink otherwise.
+        ref = validate_path(unquote(parts[3]))
+        path = '/'.join(unquote(part) for part in parts[4:])
+        if parts[2] == 'blob':
+            if not path or path.split('/')[-1] != 'SKILL.md':
+                raise ValueError('Select a SKILL.md file or a skill folder')
+            path = path.removesuffix('SKILL.md').rstrip('/')
+        directory = validate_path(path) + '/' if path else ''
+    return f'https://codeload.github.com/{owner}/{repo}/zip/{quote(ref, safe="")}', directory
+
+
+async def load_skill_from_url(url: str) -> list[dict]:
+    from open_webui.retrieval.web.utils import get_ssrf_safe_session, validate_url
+
+    url, directory = skill_import_source(url)
+    try:
+        async with asyncio.timeout(60), get_ssrf_safe_session(trust_env=False, store_cookies=False) as session:
+            for _ in range(6):
+                target = urlsplit(url)
+                if target.username or target.password:
+                    raise ValueError('Use a URL without embedded credentials')
+                await asyncio.to_thread(validate_url, url)
+                async with session.get(url, allow_redirects=False) as response:
+                    if response.status in (301, 302, 303, 307, 308):
+                        url = urljoin(url, response.headers.get('Location', ''))
+                        continue
+                    if response.status != 200:
+                        raise ValueError('Could not download the skill. Check that the URL is accessible.')
+                    content_type = response.content_type
+                    if content_type == 'text/html':
+                        raise ValueError('The URL returned a web page. Use a raw skill file or a ZIP download link.')
+                    data = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        data.extend(chunk)
+                        if len(data) > MAX_IMPORT_BYTES:
+                            raise ValueError('Import exceeds 200 MiB')
+                    filename = {
+                        'application/json': 'skills.json',
+                        'text/markdown': 'SKILL.md',
+                    }.get(content_type, unquote(urlsplit(url).path))
+                    if data.startswith(b'PK'):
+                        filename = 'skills.zip'
+                    return await asyncio.to_thread(
+                        parse_import, bytes(data), filename, discover_skills=True, directory=directory
+                    )
+            raise ValueError('Too many redirects while downloading the skill')
+    except (TimeoutError, aiohttp.ClientError) as error:
+        raise ValueError('Could not download the skill. Please try again.') from error

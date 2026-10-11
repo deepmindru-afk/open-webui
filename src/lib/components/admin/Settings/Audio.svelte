@@ -800,7 +800,7 @@
 				description={$i18n.t('settings.admin.audio.responseSplitting.description')}
 			>
 				<SettingsSelect
-					aria-label={$i18n.t('Select how to split message text for TTS requests')}
+					ariaLabel={$i18n.t('Select how to split message text for TTS requests')}
 					bind:value={TTS_SPLIT_ON}
 				>
 					{#each [{ value: TTS_RESPONSE_SPLIT.PUNCTUATION, label: $i18n.t('Punctuation') }, { value: TTS_RESPONSE_SPLIT.PARAGRAPHS, label: $i18n.t('Paragraphs') }, { value: TTS_RESPONSE_SPLIT.NONE, label: $i18n.t('None') }] as split}
@@ -812,7 +812,7 @@
 	</div>
 	<div class="flex justify-end pt-6 text-sm font-normal">
 		<button
-			class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+			class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 			type="submit"
 		>
 			{$i18n.t('Save')}

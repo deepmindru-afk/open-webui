@@ -61,13 +61,13 @@
 	}
 
 	const toggleNotifications = async () => {
-		if (!notificationEnabled) {
+		if (notificationEnabled) {
 			const permission =
 				'Notification' in window ? await Notification.requestPermission() : 'denied';
 			if (permission === 'granted') {
-				notificationEnabled = true;
 				saveSettings({ notificationEnabled });
 			} else {
+				notificationEnabled = false;
 				toast.error(
 					$i18n.t(
 						'Response notifications cannot be activated as the website permissions have been denied. Please visit your browser settings to grant the necessary access.'
@@ -75,7 +75,6 @@
 				);
 			}
 		} else {
-			notificationEnabled = false;
 			saveSettings({ notificationEnabled });
 		}
 	};
@@ -203,7 +202,7 @@
 					{$i18n.t('settings.personal.notifications.browserNotifications.label')}
 				</span>
 				<Switch
-					state={notificationEnabled}
+					bind:state={notificationEnabled}
 					ariaLabel={$i18n.t('settings.personal.notifications.browserNotifications.label')}
 					on:change={toggleNotifications}
 				/>
@@ -430,7 +429,7 @@
 				{$i18n.t('Cancel')}
 			</button>
 			<button
-				class="text-[0.8125rem] text-gray-700 transition-colors duration-100 hover:text-gray-900 disabled:opacity-30 dark:text-gray-300 dark:hover:text-white"
+				class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 				type="button"
 				on:click={saveTarget}
 				disabled={savingTarget || (!editingId && !form.url.trim())}

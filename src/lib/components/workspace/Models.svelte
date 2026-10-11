@@ -666,7 +666,7 @@
 					</Tooltip>
 
 					<div slot="content">
-						<DropdownMenu className="w-[10.625rem] shadow-sm">
+						<DropdownMenu className="min-w-[10.625rem] shadow-sm">
 							<button
 								class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 								type="button"
@@ -720,11 +720,13 @@
 
 		{#if models !== null}
 			{#if (models ?? []).length !== 0}
+				<!-- Previous labels retained for i18n extraction: {$i18n.t('Sort by')} -->
 				<div class="my-1" id="model-list">
-					<div class="flex items-center gap-3 px-2 pb-1 text-xs text-gray-400 dark:text-gray-500">
-						<span>{$i18n.t('Sort by')}</span>
+					<div
+						class="flex w-full items-center gap-2 px-1.5 pb-0.5 text-xs text-gray-400 dark:text-gray-600"
+					>
 						<button
-							class="flex items-center gap-1 py-0.5"
+							class="flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left"
 							type="button"
 							on:click={() => setSortKey('name')}
 						>
@@ -738,8 +740,10 @@
 							{/if}
 						</button>
 
+						<div class="hidden w-44 shrink-0 md:block"></div>
+
 						<button
-							class="flex items-center gap-1 py-0.5"
+							class="flex w-36 shrink-0 items-center justify-end gap-1 py-0.5 text-right"
 							type="button"
 							on:click={() => setSortKey('updated_at')}
 						>
@@ -1011,7 +1015,7 @@
 
 	{#if $config?.features.enable_community_sharing}
 		<CommunityDiscover
-			href="https://openwebui.com/models"
+			href="https://openwebui.com/search?type=model"
 			title={$i18n.t('Discover a model')}
 			description={$i18n.t('Discover, download, and explore model presets')}
 		/>

@@ -253,6 +253,7 @@ from open_webui.utils.middleware import (
     build_chat_response_context,
     process_chat_payload,
     process_chat_response,
+    publish_chat_failed_event,
 )
 from open_webui.utils.misc import get_response_error_detail, merge_model_params
 from open_webui.utils.model_ids import strip_provider_model_prefix
@@ -317,6 +318,15 @@ class SPAStaticFiles(StaticFiles):
                     return await super().get_response('index.html', scope)
             else:
                 raise ex
+
+    def file_response(
+        self, full_path: str, stat_result: os.stat_result, scope: dict, status_code: int = 200
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if full_path.endswith('.html'):
+            # Stale cached HTML references chunks from an older build
+            response.headers['Cache-Control'] = 'no-cache'
+        return response
 
 
 class CORSStaticFiles(StaticFiles):
@@ -1202,7 +1212,8 @@ async def chat_completion(
             permissions = await Config.get('user.permissions')
             for permission in ('chat.controls', 'chat.params'):
                 if not await has_permission(user.id, permission, permissions):
-                    raise HTTPException(403, 'You cannot change model parameters.')
+                    model_controls = {}
+                    break
         if missing_base_model and model_controls.get(model_id):
             raise HTTPException(400, 'Model control options cannot be applied to the fallback model.')
         if model_info_params or request_params:
@@ -1297,7 +1308,11 @@ async def chat_completion(
             or 'full'
         )
 
+        approval_resume = getattr(request.state, 'tool_approval_resume', None)
         metadata = {
+            'tool_approval_resume': approval_resume[2]
+            if approval_resume and approval_resume[:2] == (chat_id, form_data.get('assistant_message_id'))
+            else None,
             'user_id': user.id,
             'user_agent': request.headers.get('user-agent', '') or '',
             'internal': getattr(request.state, 'internal', False) is True,
@@ -1560,9 +1575,10 @@ async def chat_completion(
                             for mid, message in turn['messages'].items()
                         }
                         await event_emitter({'type': 'chat:messages', 'data': turn})
-                        await emit_chat_list_event({**metadata, 'message_id': user_message['id']}, chat_id)
+                        user_message_id = user_message.get('id')
+                        await emit_chat_list_event({**metadata, 'message_id': user_message_id}, chat_id)
                         for message_id, message in turn['messages'].items():
-                            if message_id != user_message['id'] and message.get('parentId') != user_message['id']:
+                            if message_id != user_message_id and message.get('parentId') != user_message_id:
                                 continue
                             await publish_event(
                                 request,
@@ -1571,7 +1587,10 @@ async def chat_completion(
                                 subject_id=message_id,
                                 data={'chat_id': chat_id, 'role': message['role'], 'model': message.get('model')},
                             )
-                        if not getattr(request.state, 'internal', False):
+                        if user_message_id and not (
+                            getattr(request.state, 'internal', False)
+                            or (user_message.get('meta') or {}).get('internal')
+                        ):
                             try:
                                 from open_webui.utils.timers import cancel_timers_for_chat
 
@@ -1702,6 +1721,11 @@ async def chat_completion(
                                 )
                         except Exception:
                             log.exception('Failed to emit chat error')
+
+                        try:
+                            await publish_chat_failed_event(request, user, metadata, str(error_detail))
+                        except Exception:
+                            log.exception('Failed to publish chat failed event')
         finally:
             # Clean up MCP clients.  Each client is isolated so one
             # failure doesn't skip the rest.
@@ -1896,8 +1920,14 @@ async def resolve_chat_message_tool_call(
     db: AsyncSession = Depends(get_async_session),
 ):
     resolution = await resolve_tool_call_output(id, message_id, form_data, user, db=db)
-    payload = await build_tool_approval_resume_payload(id, message_id, chat=resolution['chat'])
-    result = await chat_completion(request, payload, user)
+    if resolution['resume'] is None:
+        return {'status': True, 'chat_id': id, 'message_id': message_id, 'task_ids': []}
+    request.state.tool_approval_resume = (id, message_id, resolution['resume'])
+    try:
+        payload = await build_tool_approval_resume_payload(id, message_id, chat=resolution['chat'])
+        result = await chat_completion(request, payload, user)
+    finally:
+        del request.state.tool_approval_resume
     return {
         'status': True,
         'chat_id': id,

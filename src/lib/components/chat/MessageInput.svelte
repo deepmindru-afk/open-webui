@@ -96,6 +96,7 @@
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
 	import Photo from '../icons/Photo.svelte';
 	import Wrench from '../icons/Wrench.svelte';
+	import ArrowUpLeft from '../icons/ArrowUpLeft.svelte';
 	import Cube from '../icons/Cube.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
 	import Mic from '../icons/Mic.svelte';
@@ -125,6 +126,7 @@
 	const i18n: any = getContext('i18n');
 
 	type AskUserPrompt = {
+		id?: string;
 		show: boolean;
 		questions: any[];
 		allowOther: boolean;
@@ -1813,18 +1815,21 @@
 
 						{#if askUser?.show}
 							<div class="mx-1">
-								<AskUserCard
-									show={askUser.show}
-									questions={askUser.questions}
-									allowOther={askUser.allowOther}
-									timeoutMs={askUser.timeoutMs}
-									on:confirm={(e) => {
-										askUser.onConfirm(e.detail);
-									}}
-									on:cancel={() => {
-										askUser.onCancel();
-									}}
-								/>
+								{#key askUser.id}
+									{@const activeAskUser = askUser}
+									<AskUserCard
+										show={askUser.show}
+										questions={askUser.questions}
+										allowOther={askUser.allowOther}
+										timeoutMs={askUser.timeoutMs}
+										on:confirm={(e) => {
+											activeAskUser.onConfirm(e.detail);
+										}}
+										on:cancel={() => {
+											activeAskUser.onCancel();
+										}}
+									/>
+								{/key}
 							</div>
 						{/if}
 
@@ -2603,22 +2608,6 @@
 											</Tooltip>
 										{/if}
 
-										{#each pendingOAuthTools as pendingTool (pendingTool.id)}
-											<Tooltip content={$i18n.t('Click to connect')} placement="top">
-												<button
-													on:click|preventDefault={() => {
-														oauthRedirectHandler(pendingTool, chatInputDraft);
-													}}
-													type="button"
-													class="group px-2 py-[0.3125rem] flex gap-1.5 items-center text-xs rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden
-													text-amber-600 dark:text-amber-400 bg-amber-50 hover:bg-amber-100 dark:bg-amber-400/10 dark:hover:bg-amber-600/10 border border-amber-200/40 dark:border-amber-500/20"
-												>
-													<Wrench className="size-3.5" strokeWidth="1.75" />
-													<span class="truncate">{pendingTool.name}</span>
-												</button>
-											</Tooltip>
-										{/each}
-
 										<!-- Terminal Server Selector -->
 										{#if showTerminalSelector}
 											<TerminalMenu
@@ -2628,6 +2617,22 @@
 														history.messages[history.currentId]?.done != true)}
 											/>
 										{/if}
+
+										{#each pendingOAuthTools as pendingTool (pendingTool.id)}
+											<Tooltip content={$i18n.t('Click to connect')} placement="top">
+												<button
+													aria-label={`${$i18n.t('Click to connect')}: ${pendingTool.name}`}
+													on:click|preventDefault={() => {
+														oauthRedirectHandler(pendingTool, chatInputDraft);
+													}}
+													type="button"
+													class="flex h-[1.875rem] min-w-0 max-w-full translate-y-[0.0625rem] items-center self-center gap-1 bg-transparent px-1 text-[0.8125rem] leading-none text-gray-600 transition-colors duration-150 hover:text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-400 dark:text-gray-300 dark:hover:text-gray-100 dark:focus-visible:outline-gray-500"
+												>
+													<span class="truncate">{pendingTool.name}</span>
+													<ArrowUpLeft className="size-3 shrink-0 rotate-90" strokeWidth="1.5" />
+												</button>
+											</Tooltip>
+										{/each}
 									</div>
 								</div>
 

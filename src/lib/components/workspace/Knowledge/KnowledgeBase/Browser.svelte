@@ -117,7 +117,7 @@
 	on:cancel={() => (pendingAction = null)}
 />
 <div
-	class="flex h-full min-h-0 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50/60 dark:border-white/5 dark:bg-white/[0.03]"
+	class="flex h-full min-h-0 overflow-hidden rounded-2xl border border-gray-100/80 bg-gray-50/60 dark:border-white/[0.04] dark:bg-white/[0.03]"
 >
 	{#if $mobile}{@render sidebar()}
 	{:else}<ResizableSidePanel
@@ -166,6 +166,7 @@
 				>
 				<div slot="content">
 					<DropdownMenu className="min-w-44">
+						<!-- Previous label: {$i18n.t('File content')} -->
 						<button
 							type="button"
 							role="menuitemcheckbox"
@@ -194,6 +195,7 @@
 							on:click={() => (direction = direction === 'asc' ? 'desc' : 'asc')}
 							>{direction === 'asc' ? $i18n.t('Ascending') : $i18n.t('Descending')}</button
 						>
+						<!-- Previous labels: {$i18n.t('Asc')} {$i18n.t('Desc')} -->
 					</DropdownMenu>
 				</div></Dropdown
 			>

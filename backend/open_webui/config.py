@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from open_webui.env import (
     USE_SLIM,
+    BASE_DIR,
     DATA_DIR,
     DATABASE_URL,
     ENABLE_ADMIN_CHAT_ACCESS,
@@ -96,6 +97,11 @@ async def import_legacy_config_json():
 ####################################
 
 STATIC_DIR = Path(os.getenv('STATIC_DIR', OPEN_WEBUI_DIR / 'static')).resolve()
+STATIC_SOURCE_DIR = FRONTEND_BUILD_DIR / 'static'
+if not STATIC_SOURCE_DIR.is_dir():
+    STATIC_SOURCE_DIR = BASE_DIR / 'static' / 'static'
+if not STATIC_SOURCE_DIR.is_dir():
+    raise RuntimeError(f'Static asset source directory not found: {STATIC_SOURCE_DIR}')
 
 try:
     if STATIC_DIR.exists():
@@ -108,9 +114,9 @@ try:
 except Exception as e:
     pass
 
-for file_path in (FRONTEND_BUILD_DIR / 'static').glob('**/*'):
+for file_path in STATIC_SOURCE_DIR.glob('**/*'):
     if file_path.is_file():
-        target_path = STATIC_DIR / file_path.relative_to((FRONTEND_BUILD_DIR / 'static'))
+        target_path = STATIC_DIR / file_path.relative_to(STATIC_SOURCE_DIR)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copyfile(file_path, target_path)
@@ -120,7 +126,7 @@ for file_path in (FRONTEND_BUILD_DIR / 'static').glob('**/*'):
 # LICENSE covers copied Open WebUI logo/favicon assets.
 # Do not alter, remove, obscure, or replace them except as LICENSE permits:
 # https://docs.openwebui.com/license.
-frontend_favicon = FRONTEND_BUILD_DIR / 'static' / 'favicon.png'
+frontend_favicon = STATIC_SOURCE_DIR / 'favicon.png'
 
 if frontend_favicon.exists():
     try:
@@ -128,7 +134,7 @@ if frontend_favicon.exists():
     except Exception as e:
         logging.error(f'An error occurred: {e}')
 
-frontend_splash = FRONTEND_BUILD_DIR / 'static' / 'splash.png'
+frontend_splash = STATIC_SOURCE_DIR / 'splash.png'
 
 if frontend_splash.exists():
     try:
@@ -136,7 +142,7 @@ if frontend_splash.exists():
     except Exception as e:
         logging.error(f'An error occurred: {e}')
 
-frontend_loader = FRONTEND_BUILD_DIR / 'static' / 'loader.js'
+frontend_loader = STATIC_SOURCE_DIR / 'loader.js'
 
 if frontend_loader.exists():
     try:
@@ -2218,6 +2224,16 @@ CONTEXT_COMPACTION_RETENTION_PERCENTAGE = min(
 
 CONTEXT_COMPACTION_PROMPT_TEMPLATE = os.getenv('CONTEXT_COMPACTION_PROMPT_TEMPLATE', '')
 
+ENABLE_TOOL_SEARCH = os.getenv('ENABLE_TOOL_SEARCH', 'False').lower() == 'true'
+
+TOOL_SEARCH_DEFER_THRESHOLD = int(os.getenv('TOOL_SEARCH_DEFER_THRESHOLD', '400'))
+
+TOOL_SEARCH_ALWAYS_LOADED = [
+    item.strip() for item in os.getenv('TOOL_SEARCH_ALWAYS_LOADED', '').split(',') if item.strip()
+]
+
+TOOL_SEARCH_DEFER_BUILTIN_TOOLS = os.getenv('TOOL_SEARCH_DEFER_BUILTIN_TOOLS', 'True').lower() == 'true'
+
 TITLE_GENERATION_PROMPT_TEMPLATE = os.getenv('TITLE_GENERATION_PROMPT_TEMPLATE', '')
 
 DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task:
@@ -3179,6 +3195,10 @@ DEFAULT_CONFIG = {
     'chat.context_compaction.retention_percentage': CONTEXT_COMPACTION_RETENTION_PERCENTAGE,
     'chat.context_compaction.prompt_template': CONTEXT_COMPACTION_PROMPT_TEMPLATE,
     'chat.tool_permissions.enable': ENABLE_TOOL_PERMISSIONS,
+    'chat.tool_search.enable': ENABLE_TOOL_SEARCH,
+    'chat.tool_search.defer_threshold': TOOL_SEARCH_DEFER_THRESHOLD,
+    'chat.tool_search.always_loaded': TOOL_SEARCH_ALWAYS_LOADED,
+    'chat.tool_search.defer_builtin_tools': TOOL_SEARCH_DEFER_BUILTIN_TOOLS,
     'task.title.prompt_template': TITLE_GENERATION_PROMPT_TEMPLATE,
     'task.tags.prompt_template': TAGS_GENERATION_PROMPT_TEMPLATE,
     'task.image.prompt_template': IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE,

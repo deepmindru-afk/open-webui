@@ -186,6 +186,7 @@
 							return null;
 						});
 						if (!linkedKnowledge) {
+							toast.error($i18n.t('Failed to add file.'));
 							uploadedFile = null;
 						}
 					}
@@ -874,6 +875,7 @@
 				on:click={() => goto('/workspace/knowledge')}
 				><ChevronLeft className="size-3" strokeWidth="2" />{$i18n.t('Back')}</button
 			>
+			<!-- Previous file count label: {$i18n.t('{{COUNT}} files')} -->
 			{#if knowledge.write_access}<AccessButton
 					on:click={() => (showAccessControlModal = true)}
 				/>{:else}<span class="text-xs text-gray-500">{$i18n.t('Read Only')}</span>{/if}
@@ -909,7 +911,7 @@
 		</div>
 		<div class="mb-2 min-h-0 flex-1">
 			{#if isExternalKnowledge}<div
-					class="h-full overflow-auto rounded-2xl border border-gray-100 dark:border-white/5"
+					class="h-full overflow-auto rounded-2xl border border-gray-100/80 dark:border-white/[0.04]"
 				>
 					<div class="p-5 flex flex-col gap-4">
 						<div class="flex flex-wrap gap-2 text-xs">
