@@ -23,12 +23,14 @@
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { getMessageData } from '$lib/apis/channels';
 
+	import AppChannelReply from '../AppChannelReply.svelte';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 	import StructuredOutputRenderer from '$lib/components/chat/Messages/StructuredOutputRenderer.svelte';
 	import { buildOutputDisplayItems } from '$lib/components/chat/Messages/structuredOutput';
 	import ProfileImage from '$lib/components/chat/Messages/ProfileImage.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import GarbageBin from '$lib/components/icons/GarbageBin.svelte';
+	import Grid from '$lib/components/icons/Grid.svelte';
 	import Pencil from '$lib/components/icons/Pencil.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
@@ -399,6 +401,22 @@
 									e.currentTarget.src = '/favicon.png';
 								}}
 							/>
+						{:else if message.app_id}
+							{#if message.user?.profile_image_url}
+								<ProfileImage
+									src={message.user.profile_image_url}
+									allowExternal
+									className="size-6 mt-0.5 rounded-lg!"
+								/>
+							{:else}
+								<span
+									class="flex size-6 mt-0.5 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800"
+									role="img"
+									aria-label={$i18n.t('App')}
+								>
+									<Grid className="size-4" />
+								</span>
+							{/if}
 						{:else if message.user?.role === 'webhook'}
 							<ProfileImage
 								src={`${WEBUI_API_BASE_URL}/channels/webhooks/${message.user?.id}/profile/image`}
@@ -442,6 +460,7 @@
 								{/if}
 							</div>
 
+							{#if message.app_id}<span class="text-[0.65rem] text-gray-500">App</span>{/if}
 							{#if message.created_at}
 								<div
 									class=" shrink-0 translate-y-px text-[0.6875rem] leading-4 text-gray-500 dark:text-gray-400 font-normal first-letter:capitalize"
@@ -574,7 +593,7 @@
 									<Markdown
 										id={renderedMessageId}
 										content={message.content}
-										paragraphTag="span"
+										paragraphTag={message.app_id ? 'p' : 'span'}
 										allowEmbeds={false}
 									/>
 								</span>{#if message.created_at !== message.updated_at && (message?.meta?.model_id ?? null) === null}<span
@@ -583,6 +602,12 @@
 									>{/if}
 							{/if}
 						</div>
+
+						{#if message.app_id && message?.data?.app}
+							<div class="mt-2">
+								<AppChannelReply on:reply appId={message.app_id} channelId={channel.id} source={message} reply={{ actions: message.data.app.actions }} />
+							</div>
+						{/if}
 
 						{#if (message?.reactions ?? []).length > 0}
 							<div>
