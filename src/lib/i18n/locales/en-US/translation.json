@@ -1,4 +1,8 @@
 {
+	"Copy original to clipboard": "",
+	"Copy change to original": "",
+	"Apply uses the proposed revision on the right. Save your draft afterward.": "",
+	"Uses the proposed revision as your prompt.": "",
 	"Compare text": "",
 	"Use in prompt": "",
 	"Uses the left working copy as your prompt.": "",
@@ -1068,6 +1072,7 @@
 	"Explored": "",
 	"Exploring": "",
 	"Export": "",
+	"Export .skill": "",
 	"Export as CSV": "",
 	"Export as JSON": "",
 	"Export chat (.json)": "",

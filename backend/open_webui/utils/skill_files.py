@@ -76,17 +76,6 @@ def iter_skill_headings(content: str):
             yield {'title': title, 'level': len(heading[1]), 'offset': line_offset}
 
 
-def skill_heading_index(content: str) -> dict:
-    headings, size = [], 2
-    for entry in iter_skill_headings(content):
-        entry_size = len(json.dumps(entry, ensure_ascii=False)) + (2 if headings else 0)
-        if size + entry_size > SKILL_OVERVIEW_LIST_MAX_CHARS:
-            return {'headings': headings, 'headings_truncated': True}
-        headings.append(entry)
-        size += entry_size
-    return {'headings': headings, 'headings_truncated': False}
-
-
 def _skill_match_window(content: str, start: int, end: int) -> tuple[int, int]:
     left = max(0, start - 300)
     right = min(len(content), end + 300, left + SKILL_GREP_EXCERPT_MAX_CHARS)
@@ -215,28 +204,19 @@ def skill_overview(content: str, files: list, field: str = 'files', tools_enable
             **bounded_skill_manifest(files, field),
         }
     large = len(content) > SKILL_CONTENT_MAX_CHARS
-    overview = {
+    return {
         **skill_content_page(content, max_chars=SKILL_PREVIEW_MAX_CHARS if large else SKILL_CONTENT_MAX_CHARS),
         **bounded_skill_manifest(files, field, SKILL_OVERVIEW_LIST_MAX_CHARS),
     }
-    if large:
-        overview.update(skill_heading_index(content))
-    return overview
 
 
 def format_skill_content(page: dict, skill_id: str, tools_enabled: bool) -> str:
     content = page['content']
-    if tools_enabled and 'headings' in page:
-        content += '\nSection index: ' + json.dumps(page['headings'], ensure_ascii=False)
-        if page.get('headings_truncated'):
-            content += '\nAdditional headings omitted.'
-        content += f'\nSkill ID: {json.dumps(skill_id)}.'
-        content += f'\nnext_offset: {page["next_offset"]}'
-        return content
     if page['next_offset'] is not None:
         content += '\nSkill instructions truncated.'
         if tools_enabled:
-            content += f'\nread_skill_file(id={json.dumps(skill_id)}, path="SKILL.md", offset={page["next_offset"]}).'
+            content += f'\nSkill ID: {json.dumps(skill_id)}.'
+            content += f'\nnext_offset: {page["next_offset"]}'
     return content
 
 
@@ -363,7 +343,7 @@ def parse_import(
     if filename.lower().endswith('.json'):
         value = json.loads(data)
         packages = value if isinstance(value, list) else [value]
-    elif filename.lower().endswith('.zip'):
+    elif filename.lower().endswith(('.zip', '.skill')):
         entries = {}
         links = []
         total = 0
@@ -388,7 +368,12 @@ def parse_import(
                 total += info.file_size
                 if info.file_size > MAX_FILE_BYTES or total > MAX_IMPORT_BYTES or len(entries) >= 10000:
                     raise ValueError('Archive exceeds import limits')
-                entries[path] = archive.read(info)
+                if info.flag_bits & 1:
+                    raise ValueError('Encrypted skill archives are not supported')
+                try:
+                    entries[path] = archive.read(info)
+                except NotImplementedError as error:
+                    raise ValueError('Skill archive uses an unsupported compression method') from error
         roots = (
             [''] if 'SKILL.md' in entries else sorted(p[: -len('SKILL.md')] for p in entries if p.endswith('/SKILL.md'))
         )
@@ -406,7 +391,7 @@ def parse_import(
     elif filename.lower().endswith('.md'):
         packages = [{'files': [encode_file('SKILL.md', data)]}]
     else:
-        raise ValueError('Use JSON, ZIP, or Markdown')
+        raise ValueError('Use JSON, ZIP, .skill, or Markdown')
     total = 0
     result = []
     for package in packages:
@@ -500,7 +485,7 @@ async def load_skill_from_url(url: str) -> list[dict]:
                         raise ValueError('Could not download the skill. Check that the URL is accessible.')
                     content_type = response.content_type
                     if content_type == 'text/html':
-                        raise ValueError('The URL returned a web page. Use a raw skill file or a ZIP download link.')
+                        raise ValueError('The URL returned a web page. Use a raw skill file or a ZIP/.skill download link.')
                     data = bytearray()
                     async for chunk in response.content.iter_chunked(64 * 1024):
                         data.extend(chunk)

@@ -193,7 +193,7 @@
 			loading = false;
 		}
 	};
-	const exportVersion = async (format: 'json' | 'zip') => {
+	const exportVersion = async (format: 'json' | 'zip' | 'skill') => {
 		try {
 			saveAs(
 				await exportSkillBundle(localStorage.token, format, [id], versionId!),
@@ -434,7 +434,7 @@
 				>
 			</div>{/if}
 		<div
-			class="min-h-0 flex-1 overflow-hidden rounded-2xl border border-gray-100/80 bg-gray-50/60 dark:border-white/[0.04] dark:bg-white/[0.03]"
+			class="min-h-0 flex-1 overflow-hidden rounded-2xl border border-gray-100/50 bg-gray-50/60 dark:border-white/[0.025] dark:bg-white/[0.03]"
 		>
 			{#if historyDiff}
 				<VersionDiff
@@ -569,6 +569,9 @@
 						{/if}
 					{/snippet}
 					{#snippet exports()}
+						<button type="button" on:click={() => exportVersion('skill')}
+							><Download className="size-3.5" />{$i18n.t('Export .skill')}</button
+						>
 						<button type="button" on:click={() => exportVersion('json')}
 							><Download className="size-3.5" />{$i18n.t('Export JSON')}</button
 						>
