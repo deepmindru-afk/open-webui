@@ -13,7 +13,7 @@ from open_webui.env import ENABLE_PROFILE_IMAGE_URL_FORWARDING, STATIC_DIR
 from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_db, get_async_session
 from open_webui.models.access_grants import AccessGrants, has_public_read_access_grant, has_public_write_access_grant
-from open_webui.models.apps import App, AppInvitation
+from open_webui.models.apps import App, AppChannelMessage, AppInvitation
 from open_webui.models.channels import (
     ChannelForm,
     ChannelMember,
@@ -52,6 +52,7 @@ from open_webui.tasks import create_task
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.apps import (
     check_app_channel_access,
+    create_app_message,
     get_app_by_id,
     get_app_response,
     has_app_access,
@@ -178,6 +179,7 @@ async def check_channels_access(request: Request, user: Optional[UserModel] = No
 
 
 class ChannelListItemResponse(ChannelModel):
+    is_channel_muted: bool = False
     user_ids: Optional[list[str]] = None  # 'dm' channels only
     users: Optional[list[UserIdNameStatusResponse]] = None  # 'dm' channels only
 
@@ -228,6 +230,7 @@ async def get_channels(
                 users=users,
                 last_message_at=last_message_at,
                 unread_count=unread_count,
+                is_channel_muted=channel_member.is_channel_muted if channel_member else False,
             )
         )
 
@@ -390,6 +393,7 @@ async def create_new_channel(
 
 
 class ChannelFullResponse(ChannelResponse):
+    is_channel_muted: bool = False
     user_ids: Optional[list[str]] = None  # 'group'/'dm' channels only
     users: Optional[list[UserIdNameStatusResponse]] = None  # 'group'/'dm' channels only
 
@@ -443,6 +447,7 @@ async def get_channel_by_id(
                 'write_access': True,
                 'user_count': len(users),
                 'last_read_at': channel_member.last_read_at if channel_member else None,
+                'is_channel_muted': channel_member.is_channel_muted if channel_member else False,
                 'unread_count': unread_count,
             }
         )
@@ -480,6 +485,7 @@ async def get_channel_by_id(
                 'write_access': write_access or user.role == 'admin',
                 'user_count': user_count,
                 'last_read_at': channel_member.last_read_at if channel_member else None,
+                'is_channel_muted': channel_member.is_channel_muted if channel_member else False,
                 'unread_count': unread_count,
             }
         )
@@ -602,6 +608,37 @@ async def get_channel_members_by_id(
 
 class UpdateActiveMemberForm(BaseModel):
     is_active: bool
+
+
+class UpdateMutedMemberForm(BaseModel):
+    is_channel_muted: bool
+
+
+@router.post('/{id}/members/mute', response_model=UpdateMutedMemberForm)
+async def update_member_mute_status(
+    request: Request,
+    id: str,
+    form_data: UpdateMutedMemberForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    await check_channels_access(request, user)
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.type in ['group', 'dm']:
+        if not await Channels.is_user_channel_member(id, user.id, db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+    elif user.role != 'admin' and not await channel_has_access(user.id, channel, permission='read', db=db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+
+    is_channel_muted = await Channels.update_member_mute_status(id, user.id, form_data.is_channel_muted, db=db)
+    await emit_to_users(
+        'events:channel',
+        {'channel_id': id, 'data': {'type': 'channel:mute', 'data': {'is_channel_muted': is_channel_muted}}},
+        [user.id],
+    )
+    return {'is_channel_muted': is_channel_muted}
 
 
 @router.post('/{id}/members/active', response_model=bool)
@@ -831,7 +868,9 @@ async def delete_channel_by_id(
 
 
 @router.get('/{channel_id}/apps')
-async def get_channel_apps(channel_id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+async def get_channel_apps(
+    channel_id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)
+):
     await check_app_channel_access(channel_id, user=user, db=db)
     apps = (
         await db.scalars(
@@ -1062,11 +1101,15 @@ async def send_notification(request, channel, message, active_user_ids, db=None)
     users = await get_channel_users_with_access(channel, 'read', db=db)
 
     # Batch fetch channel members in 1 query (fixes N+1)
-    member_ids = {m.user_id for m in await Channels.get_members_by_channel_id(channel.id, db=db)}
+    members = {m.user_id: m for m in await Channels.get_members_by_channel_id(channel.id, db=db)}
+    mentioned_user_ids = {m['id'] for m in extract_mentions(message.content) if m['id_type'] == 'U'}
     url = f'{webui_url}/channels/{channel.id}'
 
     for u in users:
-        if (u.id not in active_user_ids) and u.id in member_ids:
+        member = members.get(u.id)
+        if member and member.is_channel_muted and u.id not in mentioned_user_ids:
+            continue
+        if (u.id not in active_user_ids) and member:
             if enable_user_webhooks and u.settings:
                 await publish_event(
                     request,
@@ -1122,16 +1165,37 @@ async def app_channel_reply_handler(channel_id, message_id, user_id):
                     else 'channels:mentions:read',
                 )
         except Exception as exc:
-            log.warning('App mention delivery failed: %s', type(exc).__name__)
+            log.warning(
+                'App mention delivery failed: app=%s message=%s status=%s',
+                app_id,
+                message_id,
+                getattr(exc, 'status_code', None),
+            )
             status_code = getattr(exc, 'status_code', None)
+            detail = (
+                exc.detail
+                if isinstance(exc, HTTPException) and isinstance(exc.detail, str)
+                else 'Unexpected error while delivering the message.'
+            )
             if status_code == 504:
-                detail = 'App delivery was not confirmed. It may have accepted the message; check the channel before retrying.'
-            elif status_code in (401, 403):
-                detail = 'App access was denied. Check permissions before retrying.'
-            elif status_code == 503:
-                detail = 'App is unavailable or busy. The message was not accepted.'
-            else:
-                detail = 'App delivery failed. Check its connection and server logs before retrying.'
+                detail += '\nDelivery was not confirmed. The app may have accepted the message; check before retrying.'
+            try:
+                async with get_async_db() as db:
+                    app = await get_app_by_id(app_id, require_active=True, db=db)
+                    await create_app_message(
+                        db,
+                        app,
+                        channel_id,
+                        AppChannelMessage(
+                            content='App error:\n\n```text\n' + detail[:2400].replace('```', '` ` `') + '\n```',
+                            parent_id=parent_id,
+                            reply_to_id=message_id,
+                        ),
+                    )
+                continue
+            except Exception:
+                # An inactive/removed app or one without write access cannot post a public reply.
+                log.warning('Could not save app error reply: app=%s message=%s', app_id, message_id)
             await emit_to_users(
                 'events:app',
                 {
@@ -1565,7 +1629,9 @@ async def pin_channel_message(
         message_data = MessageUserResponse(
             **{
                 **message.model_dump(),
-                'user': UserNameResponse(**message_user.model_dump()) if message_user else getattr(message, 'user', None),
+                'user': UserNameResponse(**message_user.model_dump())
+                if message_user
+                else getattr(message, 'user', None),
             }
         )
 
