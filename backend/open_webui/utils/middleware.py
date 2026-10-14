@@ -2844,7 +2844,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     )
     available_skills = []
     terminal_skills = []
-    view_skill_ids = []
     if is_note_chat:
         note_id = (chat.meta or {}).get('note_id')
         note = await Notes.get_note_by_id(note_id) if note_id else None
@@ -2872,7 +2871,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     if skill_ids or (use_builtin_tools and model_builtin_tools.get('skills', True)):
         from open_webui.models.skills import Skills as SkillsModel
-        from open_webui.utils.skill_files import bounded_skill_manifest, format_skill_content, skill_content_page
+        from open_webui.utils.skill_files import format_skill_content, skill_overview
         from open_webui.utils.terminals import (
             format_terminal_skill_context,
             format_terminal_skill_manifest_entry,
@@ -2909,30 +2908,28 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     continue
                 skill_versions[skill.id] = version_id
                 skill_tools_enabled = use_builtin_tools and model_builtin_tools.get('skills', True)
-                root_content = format_skill_content(
-                    skill_content_page(snapshot['content']), skill.id, skill_tools_enabled
+                overview = skill_overview(
+                    snapshot['content'],
+                    [f['path'] for f in snapshot['data']['files'] if f['path'] != 'SKILL.md'],
+                    tools_enabled=skill_tools_enabled,
                 )
-                manifest = bounded_skill_manifest(
-                    [f['path'] for f in snapshot['data']['files'] if f['path'] != 'SKILL.md']
-                )
-                resources = '\n'.join(manifest['files'])
+                root_content = format_skill_content(overview, skill.id, skill_tools_enabled)
+                resources = '\n'.join(overview['files'])
                 resource_hint = (
-                    f'\nRead supporting files with read_skill_file(id="{skill.id}", path=...).\n{resources}'
-                    if use_builtin_tools and model_builtin_tools.get('skills', True)
+                    f'\nSupporting files:\n{resources}'
+                    if skill_tools_enabled and resources
                     else '\nSupporting files require a model with skill tools enabled.'
                     if resources
                     else ''
                 )
-                if manifest.get('notice'):
-                    resource_hint += '\n' + manifest['notice']
+                if overview.get('notice'):
+                    resource_hint += '\n' + overview['notice']
                 form_data['messages'] = add_or_update_system_message(
-                    f'<skill id="{skill.id}" version_id="{version_id}" name="{skill.name}">\n'
-                    f'{root_content}{resource_hint}\n</skill>',
+                    f'<skill id="{skill.id}" name="{skill.name}">\n{root_content}{resource_hint}\n</skill>',
                     form_data['messages'],
                     append=True,
                 )
             else:
-                view_skill_ids.append(skill.id)
                 skill_manifest += (
                     f'<skill>\n<id>{skill.id}</id>\n<name>{skill.name}</name>\n'
                     f'<description>{skill.description or ""}</description>\n</skill>\n'
@@ -2956,7 +2953,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             sid = skill['id']
             if sid in mentioned_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
                 skill_name = unquote(sid.removeprefix(terminal_skill_prefix))
-                loaded = await get_terminal_skill(request, user.model_dump(), metadata, skill_name, extra_params)
+                loaded = await get_terminal_skill(
+                    request,
+                    user.model_dump(),
+                    metadata,
+                    skill_name,
+                    extra_params,
+                    overview=True,
+                    tools_enabled=use_builtin_tools and model_builtin_tools.get('skills', True),
+                )
                 if loaded:
                     form_data['messages'] = add_or_update_system_message(
                         format_terminal_skill_context(
@@ -2966,7 +2971,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         append=True,
                     )
             else:
-                view_skill_ids.append(sid)
                 skill_manifest += format_terminal_skill_manifest_entry(skill)
 
         if skill_manifest:
@@ -3113,7 +3117,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         **extra_params,
                         '__model__': models[task_model_id],
                         '__messages__': form_data['messages'],
-                        '__files__': metadata.get('files', []),
+                        '__files__': metadata.get('files') or [],
                     },
                 )
 
@@ -3214,7 +3218,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 {
                     **extra_params,
                     '__event_emitter__': event_emitter,
-                    '__skill_ids__': view_skill_ids,
+                    '__skill_ids__': sorted(resolved_skill_ids),
                 },
                 features,
                 model,
@@ -3503,7 +3507,7 @@ async def execute_tool_call(form_data, metadata, event_caller, tool_call):
                 function=tool['callable'],
                 extra_params={
                     '__messages__': form_data.get('messages', []),
-                    '__files__': metadata.get('files', []),
+                    '__files__': metadata.get('files') or [],
                 },
             )
             result = await function(**params)

@@ -113,13 +113,18 @@ class MessageUserResponse(MessageModel):
 
 
 class MessageUserSlimResponse(MessageUserResponse):
-    data: bool | None = None
+    data: dict | bool | None = None
 
     @field_validator('data', mode='before')
-    def convert_data_to_bool(cls, v):
+    def summarize_data(cls, v):
         # No data or not a dict → False
         if not isinstance(v, dict):
             return False
+
+        # Reply previews need card text, but not actions or other message data.
+        app = v.get('app')
+        if isinstance(app, dict) and app.get('embeds'):
+            return {'app': {'embeds': app['embeds']}}
 
         # True if ANY value in the dict is non-empty
         return any(bool(val) for val in v.values())
@@ -131,6 +136,12 @@ class MessageReplyToResponse(MessageUserResponse):
 
 class MessageWithReactionsResponse(MessageUserSlimResponse):
     reactions: list[Reactions]
+
+    @field_validator('data', mode='before')
+    def summarize_data(cls, v, info):
+        if info.data.get('app_id') and isinstance(v, dict):
+            return v
+        return super().summarize_data(v)
 
 
 class MessageResponse(MessageReplyToResponse):

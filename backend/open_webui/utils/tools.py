@@ -100,6 +100,7 @@ from open_webui.tools.builtin import (
     view_note,
     view_skill,
     read_skill_file,
+    grep_skill_files,
     create_skill,
     update_skill_files,
     write_note,
@@ -847,9 +848,14 @@ async def get_builtin_tools(
             ]
         )
 
-    # Skills tools - view_skill loads bounded instructions, with read_skill_file for continuation.
+    # Skills tools - overview, targeted search, and bounded reads of relevant passages.
+    skill_ids = sorted(set(extra_params.get('__skill_ids__') or []))
+    workspace_skill_ids = [skill_id for skill_id in skill_ids if not skill_id.startswith('terminal:')]
     if is_builtin_tool_enabled('skills'):
-        builtin_functions.extend([view_skill, read_skill_file, update_skill_files])
+        if skill_ids:
+            builtin_functions.extend([view_skill, read_skill_file, grep_skill_files])
+        if workspace_skill_ids:
+            builtin_functions.append(update_skill_files)
         if user.get('role') == 'admin' or await has_permission(
             user.get('id', ''), 'workspace.skills', await Config.get('user.permissions')
         ):

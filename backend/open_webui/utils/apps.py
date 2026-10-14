@@ -322,6 +322,7 @@ def get_app_message_data(message):
         'reply_to_id': message.reply_to_id,
         'files': (message.data or {}).get('files', []),
         'actions': (message.data or {}).get('app', {}).get('actions', []),
+        'embeds': (message.data or {}).get('app', {}).get('embeds', []),
         'created_at': str(message.created_at),
         'updated_at': str(message.updated_at),
         'etag': str(message.updated_at),
@@ -411,7 +412,12 @@ async def create_app_message(db, app, channel_id, form):
         channel_id,
         MessageForm(
             content=form.content,
-            data={'app': {'actions': [x.model_dump() for x in form.actions]}},
+            data={
+                'app': {
+                    'actions': [x.model_dump() for x in form.actions],
+                    'embeds': [x.model_dump() for x in form.embeds],
+                }
+            },
             parent_id=form.parent_id,
             reply_to_id=form.reply_to_id,
         ),
@@ -436,7 +442,15 @@ async def update_app_message(db, app, message_id, form, if_match):
         message_id,
         app.id,
         message.updated_at,
-        MessageForm(content=form.content, data={'app': {'actions': [x.model_dump() for x in form.actions]}}),
+        MessageForm(
+            content=form.content,
+            data={
+                'app': {
+                    'actions': [x.model_dump() for x in form.actions],
+                    'embeds': [x.model_dump() for x in form.embeds],
+                }
+            },
+        ),
         db=db,
     )
     if not updated:
@@ -446,8 +460,8 @@ async def update_app_message(db, app, message_id, form, if_match):
     return value
 
 
-async def generate_app_channel_reply(
-    app, user, channel_id, event_type, data, *, db: AsyncSession, source=None, operation_id=None, scope=None
+async def send_app_invocation(
+    app, user, channel_id, event_type, data, *, db: AsyncSession, source=None, operation_id=None, scope=None, timeout=3
 ):
     await check_app_invocation_access(app, channel_id, user, db=db)
     require_scope(app, scope)
@@ -474,11 +488,10 @@ async def generate_app_channel_reply(
         'execution_token': token,
         'source': source,
     }
-    checked_key = (app.api_key, app.data['manifest']['public_key'])
-    # Release the read transaction before HTTP; recheck access after the response.
+    # Release the read transaction before socket delivery.
     await db.commit()
     try:
-        status, raw = await send_app_event(app, envelope)
+        status, raw = await send_app_event(app, envelope, timeout=timeout)
     except HTTPException as exc:
         if exc.status_code == 504:
             raise HTTPException(504, 'App response timed out; execution outcome may be unknown') from None
@@ -495,7 +508,41 @@ async def generate_app_channel_reply(
             503: 'App is busy or shutting down. The event was not accepted.',
             504: 'App processing timed out; execution outcome may be unknown.',
         }.get(status, f'App returned HTTP {status}. Check the app server logs.')
-        raise HTTPException(504 if status == 504 else 502, detail)
+        raise HTTPException(status if status in (401, 403, 503, 504) else 502, detail)
+    return raw
+
+
+async def send_app_mention(app, user, channel_id, data, *, operation_id, scope, db):
+    receipt = await send_app_invocation(
+        app,
+        user,
+        channel_id,
+        'channel.mention',
+        data,
+        operation_id=operation_id,
+        scope=scope,
+        db=db,
+        timeout=10,
+    )
+    if receipt != {'received': True}:
+        raise HTTPException(502, 'App returned an invalid delivery receipt')
+
+
+async def generate_app_channel_reply(
+    app, user, channel_id, event_type, data, *, db: AsyncSession, source=None, operation_id=None, scope=None
+):
+    checked_key = (app.api_key, app.data['manifest']['public_key'])
+    raw = await send_app_invocation(
+        app,
+        user,
+        channel_id,
+        event_type,
+        data,
+        db=db,
+        source=source,
+        operation_id=operation_id,
+        scope=scope,
+    )
     app = await get_app_by_id(app.id, require_active=True, db=db)
     if (app.api_key, app.data['manifest']['public_key']) != checked_key:
         raise HTTPException(403, 'App credentials changed')
