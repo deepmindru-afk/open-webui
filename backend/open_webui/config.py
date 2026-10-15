@@ -1949,6 +1949,10 @@ USER_PERMISSIONS_FEATURES_NOTES = os.getenv('USER_PERMISSIONS_FEATURES_NOTES', '
 
 USER_PERMISSIONS_FEATURES_CHANNELS = os.getenv('USER_PERMISSIONS_FEATURES_CHANNELS', 'True').lower() == 'true'
 
+USER_PERMISSIONS_FEATURES_ENCRYPTED_CHANNELS = (
+    os.getenv('USER_PERMISSIONS_FEATURES_ENCRYPTED_CHANNELS', 'False').lower() == 'true'
+)
+
 USER_PERMISSIONS_FEATURES_API_KEYS = os.getenv('USER_PERMISSIONS_FEATURES_API_KEYS', 'False').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_MEMORIES = os.getenv('USER_PERMISSIONS_FEATURES_MEMORIES', 'True').lower() == 'true'
@@ -2032,6 +2036,7 @@ DEFAULT_USER_PERMISSIONS = {
         'notes': USER_PERMISSIONS_FEATURES_NOTES,
         'folders': USER_PERMISSIONS_FEATURES_FOLDERS,
         'channels': USER_PERMISSIONS_FEATURES_CHANNELS,
+        'encrypted_channels': USER_PERMISSIONS_FEATURES_ENCRYPTED_CHANNELS,
         'direct_tool_servers': USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS,
         # Chat features
         'web_search': USER_PERMISSIONS_FEATURES_WEB_SEARCH,
@@ -2054,6 +2059,8 @@ ENABLE_FOLDERS = os.getenv('ENABLE_FOLDERS', 'True').lower() == 'true'
 FOLDER_MAX_FILE_COUNT = os.getenv('FOLDER_MAX_FILE_COUNT', '')
 
 ENABLE_CHANNELS = os.getenv('ENABLE_CHANNELS', 'False').lower() == 'true'
+
+ENABLE_ENCRYPTED_CHANNELS = os.getenv('ENABLE_ENCRYPTED_CHANNELS', 'False').lower() == 'true'
 
 ENABLE_APPS = os.getenv('ENABLE_APPS', 'False').lower() == 'true'
 
@@ -3179,6 +3186,7 @@ DEFAULT_CONFIG = {
     'folders.enable': ENABLE_FOLDERS,
     'folders.max_file_count': FOLDER_MAX_FILE_COUNT,
     'channels.enable': ENABLE_CHANNELS,
+    'channels.encryption.enable': ENABLE_ENCRYPTED_CHANNELS,
     'apps.enable': ENABLE_APPS,
     'channels.model_response_mode': CHANNEL_MODEL_RESPONSE_MODE,
     'calendar.enable': ENABLE_CALENDAR,

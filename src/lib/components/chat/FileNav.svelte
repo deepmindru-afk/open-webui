@@ -12,7 +12,10 @@
 </script>
 
 <script lang="ts">
+	import type { TerminalContext } from '$lib/types';
 	import { toast } from 'svelte-sonner';
+	import Plus from '$lib/components/icons/Plus.svelte';
+	import Folder from '$lib/components/icons/Folder.svelte';
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import type { Readable } from 'svelte/store';
 	import type { i18n as I18n } from 'i18next';
@@ -68,6 +71,7 @@
 
 	export let overlay = false;
 	export let chatId: string | null = null;
+	export let terminalContext: TerminalContext | null = null;
 
 	// ── Terminal panel state ────────────────────────────────────────────
 	let terminalExpanded = false;
@@ -777,6 +781,7 @@
 		clearFilePreview();
 		clearSelection();
 		currentPath = directory;
+		terminalContext = { terminalId: $selectedTerminalId, currentDirectory: directory };
 		savedPath = directory;
 		pushNavHistory(directory);
 
@@ -1550,12 +1555,11 @@
 				terminalEnabled = config?.features?.terminal !== false;
 
 				const serverCwd = await getCwd(terminal.url, terminal.key, chatId ?? undefined);
-				const useServerPath = !!chatId || savedPath === '/';
 				const serverPath = applyCwd(serverCwd);
-				if (useServerPath) {
-					// Fetch session-specific cwd from the server (or global default for new chats)
-					savedPath = serverPath;
-				}
+				savedPath =
+					terminalContext && terminalContext.terminalId === $selectedTerminalId
+						? terminalContext.currentDirectory
+						: serverPath;
 				savedPath = clampToFileRoot(savedPath);
 				loadDir(savedPath, { restoreTree: true });
 			})();
@@ -2126,13 +2130,14 @@
 
 				{#if !isSearching && !loading && !error && !uploading && !($selectedTerminalId && $terminalServers === null)}
 					{#if creatingFolder}
-						<div class="flex h-7 items-center gap-2 px-2">
+						<div class="flex h-7 items-center gap-1.5 pl-[26px] pr-2">
 							<FileTypeIcon name={newFolderName} type="directory" />
 							<input
 								bind:this={newFolderInput}
 								bind:value={newFolderName}
-								class="flex-1 text-xs bg-transparent border border-gray-100 dark:border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+								class="min-w-0 flex-1 bg-transparent py-0.5 text-xs outline-hidden"
 								placeholder={$i18n.t('Folder name')}
+								aria-label={$i18n.t('Folder name')}
 								on:keydown={(e) => {
 									if (e.key === 'Enter') submitNewFolder();
 									if (e.key === 'Escape') {
@@ -2145,13 +2150,14 @@
 						</div>
 					{/if}
 					{#if creatingFile}
-						<div class="flex h-7 items-center gap-2 px-2">
+						<div class="flex h-7 items-center gap-1.5 pl-[26px] pr-2">
 							<FileTypeIcon name={newFileName} type="file" />
 							<input
 								bind:this={newFileInput}
 								bind:value={newFileName}
-								class="flex-1 text-xs bg-transparent border border-gray-100 dark:border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+								class="min-w-0 flex-1 bg-transparent py-0.5 text-xs outline-hidden"
 								placeholder={$i18n.t('File name')}
+								aria-label={$i18n.t('File name')}
 								on:keydown={(e) => {
 									if (e.key === 'Enter') submitNewFile();
 									if (e.key === 'Escape') {
@@ -2289,26 +2295,26 @@
 					</button>
 					<button
 						type="button"
-						class="select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-gray-50/40 dark:hover:bg-white/4 transition disabled:opacity-40 disabled:hover:bg-transparent"
+						class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-xs hover:text-gray-900 dark:hover:text-gray-100 disabled:opacity-40"
 						disabled={!currentWritable}
 						on:click={() => {
 							closeDirectoryMenu();
 							startNewFile();
 						}}
 					>
-						<Icon name="empty-page" size={12} strokeWidth={1.4} />
+						<Plus className="size-3.5" />
 						<span>{$i18n.t('New File')}</span>
 					</button>
 					<button
 						type="button"
-						class="select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-gray-50/40 dark:hover:bg-white/4 transition disabled:opacity-40 disabled:hover:bg-transparent"
+						class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-xs hover:text-gray-900 dark:hover:text-gray-100 disabled:opacity-40"
 						disabled={!currentWritable}
 						on:click={() => {
 							closeDirectoryMenu();
 							startNewFolder();
 						}}
 					>
-						<Icon name="folder" size={12} strokeWidth={1.4} />
+						<Folder className="size-3.5" />
 						<span>{$i18n.t('New Folder')}</span>
 					</button>
 					<button
