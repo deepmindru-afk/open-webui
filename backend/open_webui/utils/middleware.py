@@ -2059,6 +2059,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # Keep the template before apply_params_to_form_data consumes the model parameters.
     model_system_prompt_template = (form_data.get('params') or {}).get('system')
 
+    payload_tools = form_data.get('tools', None)  # snapshot before filters
     form_data = apply_params_to_form_data(form_data, model)
     log.debug('form_data: %s', form_data)
 
@@ -2070,7 +2071,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     chat_id = metadata.get('chat_id')
     user_message_id = metadata.get('user_message_id')
     pending_assistant_message = None
-    payload_tools = form_data.get('tools', None)  # snapshot before filters
     chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
     is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
     use_builtin_tools = is_note_chat or (
@@ -2453,18 +2453,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # Otherwise, save any tools that filter inlets added for merging later.
     inlet_filter_tools = None if payload_tools is not None else form_data.get('tools', None)
 
-    # Mentioned skills get bounded content; selected/default skills can be loaded through view_skill.
+    # Selected and mentioned skills get bounded content; other skills remain available through view_skill.
     chat_context = metadata.get('chat_context') or {}
     metadata['chat_context'] = chat_context
     skill_versions = chat_context.setdefault('skill_versions', {})
     mentioned_skill_ids = set(chat_context.get('mentioned_skill_ids') or []) | extract_skill_ids_from_messages(
         form_data.get('messages', [])
     )
-    skill_ids = sorted(
-        set(form_data.pop('skill_ids', None) or [])
-        | set(model.get('info', {}).get('meta', {}).get('skillIds', []))
-        | mentioned_skill_ids
-    )
+    activated_skill_ids = set(form_data.pop('skill_ids', None) or []) | mentioned_skill_ids
+    skill_ids = sorted(activated_skill_ids | set(model.get('info', {}).get('meta', {}).get('skillIds', [])))
     available_skills = []
     terminal_skills = []
     if is_note_chat:
@@ -2519,7 +2516,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
         skill_manifest = ''
         for skill in available_skills:
-            if skill.id in mentioned_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
+            if skill.id in activated_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
                 from open_webui.models.skills import get_skill_snapshot
 
                 version_id = skill_versions.get(skill.id) or skill.version_id
@@ -2531,7 +2528,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     continue
                 skill_versions[skill.id] = version_id
                 skill_tools_enabled = use_builtin_tools and model_builtin_tools.get('skills', True)
-                overview = skill_overview(
+                overview = await skill_overview(
                     snapshot['content'],
                     [f['path'] for f in snapshot['data']['files'] if f['path'] != 'SKILL.md'],
                     tools_enabled=skill_tools_enabled,
@@ -2574,7 +2571,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
         for skill in terminal_skills:
             sid = skill['id']
-            if sid in mentioned_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
+            if sid in activated_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
                 skill_name = unquote(sid.removeprefix(terminal_skill_prefix))
                 loaded = await get_terminal_skill(
                     request,

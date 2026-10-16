@@ -1464,8 +1464,9 @@
 		if (next && socket)
 			socket.emit('events:chat', { chat_id: next, data: { type: 'join' } }, (accepted: boolean) => {
 				if (!socket.connected || socket.id !== connectionId || $chatId !== next) return;
-				if (accepted) void refreshChat();
-				else clearPresence();
+				if (!accepted) clearPresence();
+				// A refused join can mean access was lost; the refresh then sends the reader home.
+				void refreshChat();
 			});
 	};
 	$: syncChatRoom($socket, $chatId, $temporaryChatEnabled);
@@ -2751,7 +2752,10 @@
 
 		// resetInput() must stay last: the selected model's defaults override the draft's selection.
 		await restoreChatInput(sessionStorage.getItem('chat-input'));
+		const previousChatId = $chatId;
 		await resetInput();
+		// A chat opened in the meantime keeps its id
+		if ($chatId !== previousChatId) return;
 		await chatId.set('');
 		await chatTitle.set('');
 
@@ -4284,8 +4288,8 @@
 			}
 		}
 
-		// Menu-selected skills are sent as IDs; inline <$skillId|label> mentions stay
-		// in the message so the backend can inject their full content.
+		// Menu-selected skills and inline <$skillId|label> mentions both load instructions.
+		// Keep mentions in the message so the backend can resolve them.
 		const skillIds = [...selectedSkillIds];
 
 		// Only send terminal_id if the model has terminal capability enabled
