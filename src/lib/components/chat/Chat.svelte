@@ -2767,9 +2767,10 @@
 		// resetInput() must stay last: the selected model's defaults override the draft's selection.
 		await restoreChatInput(sessionStorage.getItem('chat-input'));
 		const previousChatId = $chatId;
+		const previousMessageId = history.currentId;
 		await resetInput();
-		// A chat opened in the meantime keeps its id
-		if ($chatId !== previousChatId) return;
+		// A chat opened or a message sent in the meantime keeps its id and history
+		if ($chatId !== previousChatId || history.currentId !== previousMessageId) return;
 		await chatId.set('');
 		await chatTitle.set('');
 
@@ -3746,7 +3747,7 @@
 	};
 
 	const handleForkChat = async (messageId: string | null = null) => {
-		if (!$chatId || !history?.currentId) {
+		if (!$chatId || $temporaryChatEnabled || !history?.currentId) {
 			toast.message($i18n.t('No chat to fork'));
 			return;
 		}
@@ -5285,7 +5286,7 @@
 										{addMessages}
 										{onToolCallResolved}
 										allowDelete={!(generating || taskIds?.length)}
-										forkHandler={handleForkChat}
+										forkHandler={$temporaryChatEnabled ? null : handleForkChat}
 										topPadding={!embedded}
 										bottomPadding={files.length > 0}
 										{onSelect}
