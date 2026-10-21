@@ -55,6 +55,7 @@
 </script>
 
 <button
+	id="model-option-{index}"
 	role="option"
 	aria-selected={isSelected}
 	aria-label={$i18n.t('Select {{modelName}} model', { modelName: item.label })}
@@ -337,3 +338,10 @@
 		{/if}
 	</div>
 </button>
+
+<style>
+	[data-arrow-selected='true'][aria-selected='false'] {
+		outline: 2px solid var(--color-blue-500);
+		outline-offset: -2px;
+	}
+</style>
