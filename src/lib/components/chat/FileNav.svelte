@@ -17,8 +17,6 @@
 	import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 	import ArrowRight from '$lib/components/icons/ArrowRight.svelte';
 	import { toast } from 'svelte-sonner';
-	import Plus from '$lib/components/icons/Plus.svelte';
-	import Folder from '$lib/components/icons/Folder.svelte';
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import type { Readable } from 'svelte/store';
 	import type { i18n as I18n } from 'i18next';
@@ -344,6 +342,7 @@
 	let sortBy: SortMode = 'name';
 	let sortAsc = true;
 	let showHidden = false;
+	let viewMode: 'grid' | 'list' = 'list';
 	let visibleEntries: BrowserRow[] = [];
 	let expandedDirs: Set<string> = new Set();
 	let treeCache: Map<string, FileEntry[]> = new Map();
@@ -462,8 +461,22 @@
 		});
 
 	$: visibleEntries = withRowIndexes(
-		buildVisibleRows(entries, currentPath, expandedDirs, treeCache, showHidden, sortBy, sortAsc)
+		buildVisibleRows(
+			entries,
+			currentPath,
+			viewMode === 'list' ? expandedDirs : new Set(),
+			treeCache,
+			showHidden,
+			sortBy,
+			sortAsc
+		)
 	);
+
+	const changeViewMode = (mode: 'grid' | 'list') => {
+		clearSelection();
+		viewMode = mode;
+		localStorage.setItem('fileNav:viewMode', mode);
+	};
 
 	// ── Navigation history ──────────────────────────────────────────────
 	type NavEntry = { path: string; file: string | null };
@@ -1006,6 +1019,7 @@
 			treeCache = new Map(treeCache).set(directory, entries);
 			saveTreeState();
 		}
+		return result !== null;
 	};
 
 	const fetchExpandedDir = async (path: string) => {
@@ -1478,6 +1492,10 @@
 	};
 
 	// ── Folder creation ──────────────────────────────────────────────────
+	const startNewFolderIn = async (path: string) => {
+		if (await loadDir(path)) await startNewFolder();
+	};
+
 	const startNewFolder = async () => {
 		if (!currentWritable) return;
 		creatingFolder = true;
@@ -1509,6 +1527,10 @@
 	};
 
 	// ── File creation ────────────────────────────────────────────────────
+	const startNewFileIn = async (path: string) => {
+		if (await loadDir(path)) await startNewFile();
+	};
+
 	const startNewFile = async () => {
 		if (!currentWritable) return;
 		creatingFile = true;
@@ -1787,6 +1809,7 @@
 	// ── Lifecycle ────────────────────────────────────────────────────────
 	onMount(() => {
 		showHidden = localStorage.getItem('fileNav:showHidden') === 'true';
+		viewMode = localStorage.getItem('fileNav:viewMode') === 'grid' ? 'grid' : 'list';
 		const terminal = getTerminal();
 
 		let handledDisplayFile = false;
@@ -1991,7 +2014,11 @@
 		bind:this={containerEl}
 		class="flex flex-col h-full min-h-0 min-w-0 relative"
 		on:dragover={(e) => !isSearching && handleDragOver(e)}
-		on:dragleave={() => (isDragOver = false)}
+		on:dragleave={(e) => {
+			if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) {
+				isDragOver = false;
+			}
+		}}
 		on:drop={(e) => !isSearching && handleDrop(e)}
 		role="region"
 		aria-label={$i18n.t('File browser')}
@@ -1999,12 +2026,15 @@
 	>
 		{#if isDragOver && !isSearching}
 			<div
-				class="absolute inset-1 z-10 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-black/15 bg-white/80 dark:border-white/15 dark:bg-gray-900/80 pointer-events-none"
+				class="pointer-events-none absolute inset-0 z-10 bg-black/[0.02] dark:bg-white/[0.02]"
+				role="status"
 			>
-				<Icon name="upload" size={20} strokeWidth={1.4} class="text-gray-400 dark:text-gray-500" />
-				<span class="text-xs font-normal text-gray-600 dark:text-gray-300">
-					{$i18n.t('Drop to upload')}
-				</span>
+				<div
+					class="absolute left-1/2 top-1/2 flex max-w-[calc(100%-1rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-lg bg-white/95 px-2.5 py-1.5 text-xs text-gray-600 shadow-sm ring-1 ring-black/5 dark:bg-gray-850/95 dark:text-gray-300 dark:ring-white/10"
+				>
+					<Icon name="upload-tray" size={14} strokeWidth={1.5} />
+					<span class="truncate">{$i18n.t('Drop to upload')}</span>
+				</div>
 			</div>
 		{/if}
 
@@ -2019,6 +2049,8 @@
 				{sortBy}
 				{sortAsc}
 				{showHidden}
+				viewMode={isSearching ? null : viewMode}
+				onViewModeChange={changeViewMode}
 				onGoBack={goBack}
 				onGoForward={goForward}
 				onNavigate={loadDir}
@@ -2518,18 +2550,25 @@
 					{/if}
 
 					{#if visibleEntries.length > 0 || creatingFolder || creatingFile}
-						<ul>
+						<ul
+							class={viewMode === 'grid'
+								? 'grid grid-cols-[repeat(auto-fill,minmax(min(94px,calc((100%_-_0.5rem)/2)),1fr))] gap-2 p-2.5'
+								: ''}
+						>
 							{#each visibleEntries as entry (entry.fullPath)}
 								<FileEntryRow
 									{entry}
+									{viewMode}
 									currentPath={entry.parentPath}
 									fullPath={entry.fullPath}
 									depth={entry.depth}
 									rowIndex={entry.rowIndex}
 									expanded={expandedDirs.has(entry.fullPath)}
 									loadingChildren={loadingDirs.has(entry.fullPath)}
+									folderContentsVersion={loadGeneration}
 									terminalUrl={selectedTerminal.url}
 									terminalKey={selectedTerminal.key}
+									terminalSessionId={chatId ?? undefined}
 									selected={selectedEntries.has(entry.fullPath)}
 									{selectionMode}
 									selectedPaths={selectedEntries}
@@ -2550,6 +2589,8 @@
 											}
 										: undefined}
 									onDownload={downloadFile}
+									onNewFolder={startNewFolderIn}
+									onNewFile={startNewFileIn}
 									onDelete={requestDelete}
 									onMove={handleMovePaths}
 									onRename={handleRename}
@@ -2637,7 +2678,7 @@
 							refreshBrowser();
 						}}
 					>
-						<Icon name="refresh" size={12} strokeWidth={1.4} />
+						<Icon name="refresh" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('Refresh')}</span>
 					</button>
 					<button
@@ -2649,7 +2690,7 @@
 							startNewFile();
 						}}
 					>
-						<Plus className="size-3.5" />
+						<Icon name="file-plus" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('New File')}</span>
 					</button>
 					<button
@@ -2661,7 +2702,7 @@
 							startNewFolder();
 						}}
 					>
-						<Folder className="size-3.5" />
+						<Icon name="folder-plus" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('New Folder')}</span>
 					</button>
 					<button
@@ -2673,7 +2714,7 @@
 							openUploadPicker();
 						}}
 					>
-						<Icon name="upload" size={12} strokeWidth={1.4} />
+						<Icon name="upload-tray" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('Upload')}</span>
 					</button>
 					<button
@@ -2685,7 +2726,7 @@
 							openUploadPicker(true);
 						}}
 					>
-						<Icon name="upload" size={12} strokeWidth={1.4} />
+						<Icon name="folder-upload" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('Upload Folder')}</span>
 					</button>
 					<button
@@ -2696,7 +2737,7 @@
 							downloadFile(currentPath);
 						}}
 					>
-						<Icon name="download" size={12} strokeWidth={1.4} />
+						<Icon name="download-tray" size={14} strokeWidth={1.5} />
 						<span>{$i18n.t('Download')}</span>
 					</button>
 					<button
@@ -2707,7 +2748,7 @@
 							toggleHidden();
 						}}
 					>
-						<Icon name="eye" size={12} strokeWidth={1.4} />
+						<Icon name={showHidden ? 'eye-off' : 'eye'} size={14} strokeWidth={1.5} />
 						<span>{showHidden ? $i18n.t('Hide Hidden Files') : $i18n.t('Show Hidden Files')}</span>
 					</button>
 				</DropdownMenu>

@@ -144,6 +144,11 @@
 	let wordCount = 0;
 	let charCount = 0;
 
+	$: if (editor) {
+		wordCount = editor.storage.characterCount.words();
+		charCount = editor.storage.characterCount.characters();
+	}
+
 	let versionIdx = null;
 	let selectedModelId = null;
 
@@ -694,8 +699,20 @@ ${content}
 
 		input.onchange = async () => {
 			const inputFiles = Array.from(input.files ?? []);
-			if (inputFiles.length > 0) {
-				await inputFilesHandler(inputFiles);
+			for (const file of inputFiles) {
+				const fileItem = await inputFileHandler(file);
+				if (fileItem?.type === 'image' && editor) {
+					editor
+						.chain()
+						.insertContentAt(editor.state.selection.$anchor.pos, {
+							type: 'image',
+							attrs: {
+								src: `data://${fileItem.id}`
+							}
+						})
+						.focus()
+						.run();
+				}
 			}
 		};
 	};
@@ -1409,11 +1426,6 @@ ${content}
 									lastLocalContentChangeAt = Date.now();
 									note.data.content.html = content.html;
 									note.data.content.md = content.md;
-
-									if (editor) {
-										wordCount = editor.storage.characterCount.words();
-										charCount = editor.storage.characterCount.characters();
-									}
 								}}
 								fileHandler={true}
 								onFileDrop={(currentEditor, files, pos) => {

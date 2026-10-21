@@ -246,11 +246,10 @@
 		loadContent();
 	}
 
+	$: enableFullContent = item?.context === 'full';
+
 	onMount(() => {
 		console.log(item);
-		if (item?.context === 'full') {
-			enableFullContent = true;
-		}
 	});
 </script>
 
@@ -279,6 +278,7 @@
 
 				<div>
 					<button
+						aria-label={$i18n.t('Close')}
 						on:click={() => {
 							show = false;
 						}}

@@ -254,7 +254,7 @@
 
 	<div class="w-full absolute top-0 left-0 right-0 h-8 drag-region" />
 
-	{#if loaded}
+	{#if loaded && !onboarding}
 		<div
 			class="fixed inset-0 h-dvh overflow-y-auto bg-transparent w-full z-50 text-black dark:text-white"
 			id="auth-container"
@@ -672,8 +672,12 @@
 			</div>
 		</div>
 
-		{#if !$config?.metadata?.auth_logo_position}
-			<div class="fixed m-10 z-50">
+		{#if !$config?.metadata?.auth_logo_position || $config?.metadata?.auth_logo_position === 'top-right'}
+			<div
+				class="fixed top-0 m-10 z-50"
+				class:left-0={!$config?.metadata?.auth_logo_position}
+				class:right-0={$config?.metadata?.auth_logo_position === 'top-right'}
+			>
 				<div class="flex space-x-2">
 					<div class=" self-center">
 						<!-- LICENSE covers this Open WebUI sign-in logo.
