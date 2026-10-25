@@ -836,6 +836,12 @@
 		modelCapabilitiesById
 	);
 
+	let fileUploadEnabled: boolean = true;
+	$: fileUploadEnabled =
+		(getFilesystemUploadTerminal($selectedTerminalId, $terminalServers, $settings) ||
+			fileUploadCapableModels.length === selectedModelIds.length) &&
+		($_user?.role === 'admin' || $_user?.permissions?.chat?.file_upload);
+
 	let webSearchCapableModels = [];
 	$: webSearchCapableModels = getCapableModelIds(
 		selectedModelIds,
@@ -1484,6 +1490,7 @@
 				char: '@',
 				render: getSuggestionRenderer(CommandSuggestionList, {
 					i18n,
+					fileUploadEnabled: () => fileUploadEnabled,
 					onSelect: (e) => {
 						const { type, data } = e;
 
@@ -1636,6 +1643,7 @@
 				char: '#',
 				render: getSuggestionRenderer(CommandSuggestionList, {
 					i18n,
+					fileUploadEnabled: () => fileUploadEnabled,
 					onSelect: (e) => {
 						const { type, data } = e;
 
@@ -2920,6 +2928,7 @@
 											</div>
 										{:else}
 											<div class=" flex items-center">
+												<!-- Preserve the former upload label for i18n extraction: $i18n.t('Waiting for upload...') -->
 												<Tooltip content={$i18n.t('Send message')}>
 													<button
 														id="send-message-button"
