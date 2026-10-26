@@ -791,7 +791,7 @@ class ChatTable:
                                 user_id=message.get('user_id')
                                 or (message['user'].get('id') if isinstance(message.get('user'), dict) else None)
                                 or user_id,
-                                data=message,
+                                data={**message, 'timestamp': message.get('timestamp')},
                             )
                         except Exception as e:
                             log.warning(
@@ -1087,18 +1087,22 @@ class ChatTable:
 
         if message_id in messages:
             # Voice updates must not replace approval-resume metadata, and approval
-            # pauses must retain the generated speech already attached to this turn.
+            # pauses must retain speech and response timing already attached to this turn.
             existing_meta = messages[message_id].get('meta')
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             incoming_meta = message.get('meta')
             if isinstance(incoming_meta, dict):
-                if set(incoming_meta) <= {'voice', 'task_id'}:
+                if set(incoming_meta) <= {'voice', 'task_id', 'response_started_at', 'response_ended_at'}:
                     message = {**message, 'meta': {**existing_meta, **incoming_meta}}
                 else:
                     message = {
                         **message,
                         'meta': {
-                            **{key: existing_meta[key] for key in ('voice', 'task_id') if key in existing_meta},
+                            **{
+                                key: existing_meta[key]
+                                for key in ('voice', 'task_id', 'response_started_at', 'response_ended_at')
+                                if key in existing_meta
+                            },
                             **incoming_meta,
                         },
                     }
@@ -1820,6 +1824,11 @@ class ChatTable:
                     chat_ids = chat_ids.filter(ChatMessage.created_at >= filter.get('start_date'))
                 if filter.get('end_date'):
                     chat_ids = chat_ids.filter(ChatMessage.created_at <= filter.get('end_date'))
+                if filter.get('group_id'):
+                    from open_webui.models.groups import group_user_memberships
+
+                    group_users = select(group_user_memberships([filter['group_id']], True).c.user_id).scalar_subquery()
+                    chat_ids = chat_ids.filter(ChatMessage.user_id.in_(group_users))
 
             chat_ids = chat_ids.subquery()
 
