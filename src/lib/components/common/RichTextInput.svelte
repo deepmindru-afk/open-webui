@@ -276,7 +276,7 @@
 	export let image = false;
 	export let fileHandler = false;
 	export let attachments = false;
-	export let suggestions = null;
+	export let suggestions: Partial<import('@tiptap/suggestion').SuggestionOptions>[] | null = null;
 
 	export let onFileDrop = (currentEditor, files, pos) => {
 		files.forEach((file) => {
@@ -797,6 +797,7 @@
 		if (value !== '') {
 			// After updating the state, try to find and select the next template
 			setTimeout(() => {
+				if (destroyed || !editor || editor.isDestroyed) return;
 				const templateFound = selectNextTemplate(editor.view.state, editor.view.dispatch);
 				if (!templateFound && !suppressAutoFocus) {
 					editor.commands.focus('end');
