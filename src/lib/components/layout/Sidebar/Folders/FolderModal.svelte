@@ -130,7 +130,7 @@
 	}
 </script>
 
-<Modal size="md" bind:show>
+<Modal ariaLabel={edit ? $i18n.t('Edit Folder') : $i18n.t('Create Folder')} size="md" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-4 pt-3 pb-1">
 			<div class=" text-sm self-center">
@@ -165,7 +165,9 @@
 					}}
 				>
 					<div class="flex flex-col w-full mt-1">
-						<div class=" mb-1 text-xs text-gray-500">{$i18n.t('Folder Name')}</div>
+						<label for="folder-name" class="block mb-1 text-xs text-gray-500"
+							>{$i18n.t('Folder Name')}</label
+						>
 
 						<div class="flex-1">
 							<input
@@ -225,11 +227,13 @@
 					/>
 
 					<div class="flex justify-between w-full mt-1 items-center">
-						<div class="text-xs text-gray-500">{$i18n.t('Folder Background Image')}</div>
+						<div id="folder-background-image-label" class="text-xs text-gray-500">
+							{$i18n.t('Folder Background Image')}
+						</div>
 
 						<div class="">
 							<button
-								aria-labelledby="chat-background-label background-image-url-state"
+								aria-labelledby="folder-background-image-label folder-background-image-state"
 								class="p-1 px-3 text-xs flex rounded-sm transition"
 								on:click={() => {
 									if (meta?.background_image_url !== null) {
@@ -243,7 +247,7 @@
 								}}
 								type="button"
 							>
-								<span class="ml-2 self-center" id="background-image-url-state"
+								<span class="ml-2 self-center" id="folder-background-image-state"
 									>{(meta?.background_image_url ?? null) === null
 										? $i18n.t('Upload')
 										: $i18n.t('Reset')}</span

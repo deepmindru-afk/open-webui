@@ -95,7 +95,7 @@
 	}}
 />
 
-<Modal size="lg" bind:show>
+<Modal ariaLabel={title} size="lg" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-4 pt-3 pb-1">
 			<div class="flex items-center gap-2 text-sm font-medium self-center">
@@ -153,6 +153,7 @@
 						<input
 							class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
 							bind:value={query}
+							aria-label={$i18n.t('Search Chats')}
 							placeholder={$i18n.t('Search Chats')}
 							maxlength="500"
 						/>
