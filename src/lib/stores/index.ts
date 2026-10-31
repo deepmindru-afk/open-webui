@@ -181,7 +181,6 @@ export const showControls = writable<
 	| 'controls'
 	| 'files'
 	| 'comments'
-	| 'overview'
 	| (CommentTarget & { tab: 'comments'; comment_id?: string })
 >(false);
 export const showEmbeds = writable(false);
@@ -416,6 +415,7 @@ type Config = {
 		enable_memories: boolean;
 		enable_notes?: boolean;
 		enable_comments?: boolean;
+		enable_notifications?: boolean;
 		enable_channels?: boolean;
 		enable_user_webhooks?: boolean;
 		enable_automations?: boolean;
