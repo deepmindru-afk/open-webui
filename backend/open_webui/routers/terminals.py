@@ -6,9 +6,12 @@ Routes:
 """
 
 import asyncio
+import json
 import logging
+import re
+from html import escape
 import posixpath
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin, urlsplit
 
 import aiohttp
 from fastapi import APIRouter, Depends, Request, Response, WebSocket
@@ -46,6 +49,78 @@ ADMIN_API_PATHS = ('api/v1/policies', 'api/v1/status', 'api/v1/terminals')
 STRIPPED_RESPONSE_HEADERS = frozenset(
     ('transfer-encoding', 'connection', 'content-encoding', 'content-length', 'server', 'date')
 )
+
+
+def _port_browser_html(body: bytes, prefix: str, port: int) -> bytes:
+    """Keep port links inside the proxy and report navigation from sandboxed frames."""
+    config = json.dumps({'prefix': prefix, 'origin': f'http://localhost:{port}'}).replace(
+        '<', '\\u003c'
+    )
+    script = r"""
+(() => {
+  const config = __CONFIG__;
+  const remote = (value = location.href) => {
+    const url = new URL(value, location.href);
+    return url.pathname.startsWith(config.prefix)
+      ? config.origin + '/' + url.pathname.slice(config.prefix.length) + url.search + url.hash
+      : url.href;
+  };
+  const destination = value => new URL(value, remote());
+  const proxy = value => {
+    const url = destination(value);
+    return url.origin === config.origin ? config.prefix + url.pathname.slice(1) + url.search + url.hash : url.href;
+  };
+  const report = () => parent.postMessage({type: 'terminal-browser-state', url: remote(), title: document.title}, '*');
+  for (const method of ['pushState', 'replaceState']) {
+    const original = history[method].bind(history);
+    history[method] = (state, title, value) => {
+      try { const result = original(state, title, value == null ? value : proxy(value)); queueMicrotask(report); return result; }
+      catch (error) {
+        if (error.name !== 'SecurityError' || value == null) throw error;
+        parent.postMessage({type: 'terminal-browser-navigate', url: destination(value).href, replace: method === 'replaceState'}, '*');
+      }
+    };
+  }
+  addEventListener('popstate', report);
+  addEventListener('hashchange', report);
+  document.addEventListener('click', event => {
+    const link = event.target.closest?.('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.hasAttribute('download')) return;
+    const url = destination(remote(link.href));
+    if (!/^https?:$/.test(url.protocol)) return;
+    event.preventDefault();
+    parent.postMessage({type: 'terminal-browser-navigate', url: url.href}, '*');
+  }, true);
+  document.addEventListener('submit', event => {
+    const form = event.target;
+    if (form instanceof HTMLFormElement) form.action = proxy(form.getAttribute('action') || remote());
+  }, true);
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => nativeFetch(input instanceof Request ? new Request(proxy(input.url), input) : proxy(input), init);
+  const nativeOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) { return nativeOpen.call(this, method, proxy(url), ...rest); };
+  addEventListener('DOMContentLoaded', () => {
+    new MutationObserver(report).observe(document.querySelector('title') || document.head || document.documentElement, {childList:true,subtree:true,characterData:true});
+    report();
+  });
+  report();
+})();
+""".replace('__CONFIG__', config)
+    html = body.decode('utf-8', errors='replace')
+    # Root-relative assets otherwise resolve against WebUI instead of the port.
+    html = re.sub(
+        r"""(\b(?:href|src|action)\s*=\s*["'])/(?!/)""",
+        lambda match: match[1] + escape(prefix, quote=True),
+        html,
+        flags=re.I,
+    )
+    bridge = '<script>' + script + '</script>'
+    head = re.search(r'<head\b[^>]*>', html, re.I)
+    if head:
+        html = html[:head.end()] + bridge + html[head.end():]
+    else:
+        html = bridge + html
+    return html.encode('utf-8')
 
 
 def _sanitize_proxy_path(path: str) -> str | None:
@@ -222,6 +297,29 @@ async def proxy_terminal(
         if TERMINAL_PROXY_HEADERS:
             filtered_headers.update(TERMINAL_PROXY_HEADERS)
 
+        port_match = re.match(r'^proxy/(\d+)/', safe_path)
+        port_prefix = None
+        if port_match:
+            port_prefix = request.url.path[
+                :request.url.path.index('/proxy/') + len(port_match[0]) + 1
+            ]
+            location = upstream_response.headers.get('location')
+            if location:
+                remote_origin = f'http://localhost:{port_match[1]}'
+                destination = urlsplit(
+                    urljoin(f'{remote_origin}/{safe_path[len(port_match[0]):]}', location)
+                )
+                if destination.netloc == urlsplit(remote_origin).netloc:
+                    filtered_headers = {
+                        key: value for key, value in filtered_headers.items()
+                        if key.lower() != 'location'
+                    }
+                    filtered_headers['Location'] = (
+                        port_prefix + destination.path.lstrip('/')
+                        + (f'?{destination.query}' if destination.query else '')
+                        + (f'#{destination.fragment}' if destination.fragment else '')
+                    )
+
         # Stream binary responses directly
         if any(t in upstream_content_type for t in STREAMING_CONTENT_TYPES):
 
@@ -238,6 +336,8 @@ async def proxy_terminal(
 
         # Buffer text/JSON responses
         response_body = await upstream_response.read()
+        if port_prefix and 'text/html' in upstream_content_type:
+            response_body = _port_browser_html(response_body, port_prefix, int(port_match[1]))
         status_code = upstream_response.status
         await upstream_response.release()
         await session.close()
@@ -331,13 +431,22 @@ async def _resolve_terminal_access(ws: WebSocket, server_id: str, token: str):
     return user, connection
 
 
+@router.websocket('/{server_id}/files/events')
+async def ws_file_events(ws: WebSocket, server_id: str):
+    await _proxy_terminal_websocket(ws, server_id)
+
+
 @router.websocket('/{server_id}/api/terminals/{session_id}')
-async def ws_terminal(
+async def ws_terminal(ws: WebSocket, server_id: str, session_id: str):
+    await _proxy_terminal_websocket(ws, server_id, session_id)
+
+
+async def _proxy_terminal_websocket(
     ws: WebSocket,
     server_id: str,
-    session_id: str,
+    session_id: str | None = None,
 ):
-    """Proxy an interactive WebSocket terminal session to a terminal server.
+    """Proxy terminal sessions and filesystem notifications to a terminal server.
 
     Uses first-message auth: the client sends ``{"type": "auth", "token": "<jwt>"}``
     as its first message. The proxy validates the JWT, then connects to the
@@ -373,9 +482,11 @@ async def ws_terminal(
 
     # Encode session_id as an opaque path segment so it cannot smuggle '?'/'#'/'&' (at any
     # decode depth) and inject an attacker-chosen user_id ahead of the one appended below.
-    safe_session_id = urllib.parse.quote(session_id, safe='')
-
-    upstream_url = f'{ws_base}/api/terminals/{safe_session_id}'
+    upstream_path = (
+        f'api/terminals/{urllib.parse.quote(session_id, safe="")}'
+        if session_id is not None else 'files/events'
+    )
+    upstream_url = f'{ws_base}/{upstream_path}'
     if upstream_params:
         upstream_url += f'?{urllib.parse.urlencode(upstream_params)}'
 
@@ -400,15 +511,16 @@ async def ws_terminal(
             else:
                 await upstream.send_str(_json.dumps({'type': 'auth', 'token': ''}))
 
-            await publish_event(
-                request,
-                EVENTS.TERMINAL_SESSION_OPENED,
-                actor=user,
-                subject_id=session_id,
-                subject_type='terminal.session',
-                data={'server_id': server_id},
-            )
-            opened = True
+            if session_id is not None:
+                await publish_event(
+                    request,
+                    EVENTS.TERMINAL_SESSION_OPENED,
+                    actor=user,
+                    subject_id=session_id,
+                    subject_type='terminal.session',
+                    data={'server_id': server_id},
+                )
+                opened = True
 
             async def _client_to_upstream():
                 """Forward client → upstream."""
@@ -437,6 +549,8 @@ async def ws_terminal(
                             aiohttp.WSMsgType.ERROR,
                         ):
                             break
+                    if session_id is None and upstream.close_code and 4000 <= upstream.close_code < 5000:
+                        await ws.close(code=upstream.close_code)
                 except Exception:
                     pass
 

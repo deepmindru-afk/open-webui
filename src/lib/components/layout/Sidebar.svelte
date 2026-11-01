@@ -13,7 +13,7 @@
 		tags,
 		folders as _folders,
 		showSidebar,
-		showControls,
+		showTabs,
 		showSearch,
 		mobile,
 		pinnedChats,
@@ -22,7 +22,6 @@
 		channels,
 		socket,
 		config,
-		isApp,
 		visiblePinnedModels,
 		visibleControls,
 		selectedFolder,
@@ -727,7 +726,8 @@
 
 	const MIN_WIDTH = 220;
 	const MAX_WIDTH = 480;
-	const MOBILE_WIDTH = 280;
+	let viewportWidth = 320;
+	$: mobileWidth = Math.min(MAX_WIDTH, Math.max(0, viewportWidth - 40));
 
 	let isResizing = false;
 	let activePointerId: number | null = null;
@@ -1034,6 +1034,7 @@
 />
 
 <svelte:window
+	bind:innerWidth={viewportWidth}
 	on:pointermove={(e) => {
 		if (!isResizing) return;
 		if (activePointerId !== null && e.pointerId !== activePointerId) return;
@@ -1050,8 +1051,8 @@
 <MobileSwipePanel
 	open={$showSidebar}
 	enabled={$mobile}
-	blocked={!!$showControls}
-	width={$mobile ? MOBILE_WIDTH : $sidebarWidth}
+	blocked={!!$showTabs}
+	width={$mobile ? mobileWidth : $sidebarWidth}
 	onOpenChange={(open) => showSidebar.set(open)}
 	let:visible
 	let:progress
@@ -1062,9 +1063,7 @@
 
 	{#if visible}
 		<div
-			class=" {$isApp
-				? ' ml-[4.5rem] md:ml-0'
-				: ''} fixed md:hidden z-40 top-0 right-0 left-0 bottom-0 bg-black w-full min-h-screen h-screen flex justify-center overflow-hidden overscroll-contain {progress >
+			class="fixed md:hidden z-40 top-0 right-0 left-0 bottom-0 bg-black w-full min-h-screen h-screen flex justify-center overflow-hidden overscroll-contain {progress >
 			0.02
 				? ''
 				: 'pointer-events-none'}"
@@ -1289,14 +1288,10 @@
 				? visible
 					? 'bg-gray-50 dark:bg-gray-950 z-50'
 					: 'bg-transparent z-0 pointer-events-none'
-				: `bg-gray-50 dark:bg-gray-950 z-50 ${$showSidebar ? '' : 'pointer-events-none'}`} {$isApp
-				? `ml-[4.5rem] md:ml-0 `
-				: $mobile
-					? ''
-					: ''} shrink-0 text-gray-700 dark:text-gray-300 text-[0.8125rem] leading-5 fixed top-0 left-0 overflow-x-hidden
+				: `bg-gray-50 dark:bg-gray-950 z-50 ${$showSidebar ? '' : 'pointer-events-none'}`} shrink-0 text-gray-700 dark:text-gray-300 text-[0.8125rem] leading-5 fixed top-0 left-0 overflow-x-hidden
         "
 			style={$mobile
-				? `${panelStyle} --sidebar-width: ${MOBILE_WIDTH}px;`
+				? `${panelStyle} --sidebar-width: ${mobileWidth}px;`
 				: `width: ${$showSidebar ? 'var(--sidebar-width)' : '0'}; transition: width 250ms cubic-bezier(0.22, 1, 0.36, 1);`}
 			data-state={$showSidebar}
 		>

@@ -37,7 +37,7 @@
 		toolServers,
 		terminalServers,
 		user as _user,
-		showControls,
+		showTabs,
 		showSettings,
 		showFileNavDir,
 		selectedTerminalId,
@@ -167,6 +167,9 @@
 	export let atSelectedModel: Model | undefined = undefined;
 	export let selectedModels: [''];
 	export let onModelSelect: (models: string[]) => void = () => {};
+	export let chatFiles: any[] = [];
+	export let params: Record<string, any> = {};
+	export let onParamChange: (key: string, value: unknown) => void = () => {};
 
 	let selectedModelIds = [];
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
@@ -2487,7 +2490,7 @@
 										<button
 											type="button"
 											id="input-menu-button"
-											class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+											class="bg-transparent hover:bg-gray-100/40 text-gray-700 dark:text-white dark:hover:bg-gray-800/40 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 											aria-label={$i18n.t('More')}
 										>
 											<PlusAlt className="size-5" />
@@ -2537,7 +2540,7 @@
 											<button
 												type="button"
 												id="integration-menu-button"
-												class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+												class="bg-transparent hover:bg-gray-100/40 text-gray-700 dark:text-white dark:hover:bg-gray-800/40 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 												aria-label={$i18n.t('Integrations')}
 											>
 												<Component className="size-4.5" strokeWidth="1.5" />
@@ -2807,7 +2810,12 @@
 											triggerClassName="items-center gap-1.5 rounded-lg pl-2 pr-1.5 py-1 text-[0.8125rem] font-normal text-gray-600 transition-colors duration-100 hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
 										/>
 									</div>
-									<ModelControls selectedModels={selectedModelIds} />
+									<ModelControls
+										selectedModels={selectedModelIds}
+										bind:chatFiles
+										bind:params
+										{onParamChange}
+									/>
 
 									{#if isActive && (history.messages[history.currentId]?.user_id ?? $_user?.id) === $_user?.id && prompt === '' && files.length === 0}
 										<div class=" flex items-center">
@@ -2890,7 +2898,7 @@
 														on:click={async () => {
 															if (callActive) {
 																showCallOverlay.set(true);
-																showControls.set(true);
+																showTabs.set(true);
 																return;
 															}
 															if (selectedModels.length > 1) {
@@ -2901,7 +2909,7 @@
 
 															if ($config?.audio?.realtime?.enabled) {
 																showCallOverlay.set(true);
-																showControls.set(true);
+																showTabs.set(true);
 																return;
 															}
 
@@ -2933,7 +2941,7 @@
 																}
 
 																showCallOverlay.set(true);
-																showControls.set(true);
+																showTabs.set(true);
 															} catch (err) {
 																// If the user denies the permission or an error occurs, show an error message
 																toast.error(

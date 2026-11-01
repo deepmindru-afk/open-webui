@@ -20,10 +20,21 @@
 	let fitAddon: FitAddon;
 	let ws: WebSocket | null = null;
 	let resizeObserver: ResizeObserver;
+	let themeObserver: MutationObserver;
 	let pingInterval: ReturnType<typeof setInterval>;
 	let destroyed = false;
 	let sessionId = '';
 	const terminalOwner = Symbol();
+	let reportedActive: boolean | null = null;
+
+	function reportActivity(visible: boolean) {
+		if (readOnly || !connected || ws?.readyState !== WebSocket.OPEN) return;
+		const isActive = visible && !document.hidden;
+		if (reportedActive === isActive) return;
+		ws.send(JSON.stringify({ type: 'activity', active: isActive }));
+		reportedActive = isActive;
+	}
+	const reportVisibility = () => reportActivity(active);
 
 	function disconnect() {
 		connectedUserTerminals.update((entries) => {
@@ -32,6 +43,7 @@
 		});
 		connected = false;
 		connecting = false;
+		reportedActive = null;
 		clearInterval(pingInterval);
 	}
 
@@ -45,6 +57,25 @@
 
 	function fit() {
 		if (active && terminalEl?.clientWidth && terminalEl?.clientHeight) fitAddon?.fit();
+	}
+
+	function updateTheme() {
+		if (!term) return;
+		term.options.theme = document.documentElement.classList.contains('dark')
+			? {
+					background: '#00000000',
+					foreground: '#c0c0c0',
+					cursor: '#ffffff',
+					cursorAccent: '#171717',
+					selectionBackground: '#444444'
+				}
+			: {
+					background: '#ffffff',
+					foreground: '#171717',
+					cursor: '#171717',
+					cursorAccent: '#ffffff',
+					selectionBackground: '#bfdbfe'
+				};
 	}
 
 	async function connect() {
@@ -81,6 +112,7 @@
 				}
 				connected = true;
 				connecting = false;
+				reportActivity(active);
 				fit();
 				if (active) term?.focus();
 				if (term) ws?.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
@@ -111,21 +143,25 @@
 	}
 
 	$: if (active && term) requestAnimationFrame(fit);
+	$: if (connected) reportActivity(active);
 
 	onMount(() => {
+		document.addEventListener('visibilitychange', reportVisibility);
 		term = new Terminal({
+			allowTransparency: true,
 			cursorBlink: !readOnly,
 			disableStdin: readOnly,
 			fontSize: 13,
 			fontFamily:
 				"'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
-			theme: {
-				background: '#000000',
-				foreground: '#c0c0c0',
-				cursor: '#ffffff',
-				selectionBackground: '#444444'
-			},
+			minimumContrastRatio: 4.5,
 			scrollback: 5000
+		});
+		updateTheme();
+		themeObserver = new MutationObserver(updateTheme);
+		themeObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ['class']
 		});
 		fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
@@ -151,19 +187,27 @@
 	});
 
 	onDestroy(() => {
+		document.removeEventListener('visibilitychange', reportVisibility);
 		destroyed = true;
 		disconnect();
 		ws?.close();
 		resizeObserver?.disconnect();
+		themeObserver?.disconnect();
 		term?.dispose();
 		term = null;
 	});
 </script>
 
-<div class="h-full min-h-0 relative">
+<div class="terminal-view h-full min-h-0 relative bg-white dark:bg-transparent">
 	<div
 		bind:this={terminalEl}
-		class="absolute inset-0 px-0.5"
+		class="absolute inset-0 pl-2 pr-0.5"
 		class:pointer-events-none={overlay}
 	></div>
 </div>
+
+<style>
+	.terminal-view :global(.xterm-viewport) {
+		background-color: transparent;
+	}
+</style>
