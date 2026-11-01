@@ -319,6 +319,7 @@
 
 					<div class="max-h-96 overflow-auto" bind:this={editScrollContainer}>
 						<textarea
+							aria-label={$i18n.t('Message')}
 							id="message-edit-{message.id}"
 							bind:this={messageEditTextAreaElement}
 							class=" bg-transparent outline-hidden focus-visible:outline-none! w-full resize-none text-[0.9375rem]"
@@ -527,6 +528,7 @@
 										class="text-sm flex justify-center font-normal self-center dark:text-gray-500 min-w-fit"
 									>
 										<input
+											aria-label={$i18n.t('Message number')}
 											id="message-index-input-{message.id}"
 											type="number"
 											value={siblings.indexOf(message.id) + 1}
@@ -651,6 +653,7 @@
 										class="text-sm flex justify-center font-normal self-center dark:text-gray-500 min-w-fit"
 									>
 										<input
+											aria-label={$i18n.t('Message number')}
 											id="message-index-input-{message.id}"
 											type="number"
 											value={siblings.indexOf(message.id) + 1}
