@@ -40,6 +40,19 @@
 	let chromeForward = false;
 	let frameReady = false;
 	$: viewUrl = session && sessionConnection ? browserViewUrl(sessionConnection, session) : '';
+	$: if (session && sessionConnection) {
+		void updateBrowserSession(sessionConnection, sessionChatId, session.id, { active }).catch(
+			() => {}
+		);
+	}
+	$: if (session && sessionConnection && chatId && !sessionChatId) {
+		const savedChatId = chatId;
+		void updateBrowserSession(sessionConnection, sessionChatId, session.id, {
+			chat_id: savedChatId
+		})
+			.then(() => (sessionChatId = savedChatId))
+			.catch(() => {});
+	}
 	const persist = (url: string, title: string) => {
 		if (session && sessionConnection)
 			void updateBrowserSession(sessionConnection, sessionChatId, session.id, { url, title }).catch(
@@ -429,7 +442,7 @@
 					bind:this={iframe}
 					src={frameUrl}
 					title={$i18n.t('Browser')}
-					class="block h-full w-full border-0 bg-white dark:bg-gray-900"
+					class="block h-full w-full border-0 bg-white"
 					sandbox="allow-scripts{!session && ($settings?.terminalPreviewAllowSameOrigin ?? false)
 						? ' allow-same-origin'
 						: ''} allow-forms allow-popups allow-modals allow-downloads"
