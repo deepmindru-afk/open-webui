@@ -53,6 +53,7 @@
 	import { fileIconName } from './FileNav/fileIcon';
 	import UntitledFile from './ChatTabs/UntitledFile.svelte';
 	import Browser from './ChatTabs/Browser.svelte';
+	import Desktop from './ChatTabs/Desktop.svelte';
 	import XTerminal from './XTerminal.svelte';
 	import CallPanel from './MessageInput/CallPanel.svelte';
 	import Drawer from '../common/Drawer.svelte';
@@ -109,14 +110,16 @@
 	let dirtyFiles: Record<string, boolean> = {};
 	let fileContexts: Record<string, TerminalContext | null> = {};
 	let panelTarget: HTMLElement | null = null;
-	let initialized = false;
 	let tabsChatId = chatId;
+	let hasOpenedTabs = false;
 	let terminalSequence = 0;
 	let commentTarget: { comment_id?: string } = {};
 	let closing = new Set<string>();
 	let navigationApproved = false;
 	let selectedConnection: TerminalConnection | null = null;
 	let terminalEnabled = false;
+	let desktopEnabled = false;
+	let browserEnabled = false;
 	let featureVersion = 0;
 	let releasePanel: (target: HTMLElement) => void = () => {};
 	const preservePanel = (target: HTMLElement) => ({ destroy: () => releasePanel(target) });
@@ -155,6 +158,7 @@
 			file: 'page',
 			terminal: 'terminal',
 			browser: 'browser',
+			desktop: 'monitor',
 			artifacts: 'code',
 			preview: 'browser',
 			voice: 'microphone',
@@ -187,7 +191,7 @@
 		showTabs.set(true);
 	};
 	const openPanel = (tab: PanelTab) => {
-		initialized = true;
+		hasOpenedTabs = true;
 		tabs = openTab(tabs, tab);
 		showTabs.set(true);
 	};
@@ -250,8 +254,25 @@
 			connection: { ...selectedConnection }
 		});
 	};
-	const openBrowser = (port?: number, selector = $selectedTerminalId, baseUrl?: string) => {
-		const url = port ? `http://localhost:${port}/` : undefined;
+	const openDesktop = () => {
+		if (!desktopEnabled || !selectedConnection) return;
+		openPanel({
+			id: JSON.stringify(['desktop', selectedConnection.selector]),
+			kind: 'desktop',
+			label: $i18n.t('Desktop'),
+			terminalId: selectedConnection.selector,
+			connection: { ...selectedConnection }
+		});
+	};
+	const openBrowser = (
+		port?: number,
+		selector = $selectedTerminalId,
+		baseUrl?: string,
+		initialUrl?: string
+	) => {
+		if (!selector || !terminalAccessible(selector)) return;
+		if (selector === $selectedTerminalId && !browserEnabled) return;
+		const url = initialUrl ?? (port ? `http://localhost:${port}/` : undefined);
 		const existing =
 			url &&
 			tabs.tabs.find(
@@ -269,7 +290,7 @@
 					localStorage.token ?? ''
 				)
 			: null;
-		if (selector && !terminalAccessible(selector)) return;
+		if (!connection) return;
 		const terminal = ($terminalServers ?? []).find((item) => item.id === selector);
 		const proxyBase =
 			baseUrl ??
@@ -462,8 +483,7 @@
 		for (const tab of tabs.tabs) {
 			const available = tab.terminalId
 				? !!$selectedTerminalId && terminalAccessible(tab.terminalId)
-				: tab.kind === 'browser' ||
-					availableViews.some((view) => view.kind === tab.kind && view.available);
+				: availableViews.some((view) => view.kind === tab.kind && view.available);
 			if (!available) {
 				tabs = removeTab(tabs, tab.id);
 				delete dirtyFiles[tab.id];
@@ -484,6 +504,8 @@
 	const checkTerminal = async () => {
 		const version = ++featureVersion;
 		terminalEnabled = false;
+		desktopEnabled = false;
+		browserEnabled = false;
 		selectedConnection =
 			terminalFilesAvailable && mounted
 				? resolveTerminalConnection(
@@ -495,12 +517,14 @@
 				: null;
 		if (!selectedConnection) return;
 		try {
-			const result = await terminalRequest<{ features?: { terminal?: boolean } }>(
-				selectedConnection,
-				chatId,
-				'/api/config'
-			);
-			if (version === featureVersion) terminalEnabled = result.features?.terminal !== false;
+			const result = await terminalRequest<{
+				features?: { terminal?: boolean; desktop?: boolean; browser?: boolean };
+			}>(selectedConnection, chatId, '/api/config');
+			if (version === featureVersion) {
+				terminalEnabled = result.features?.terminal !== false;
+				desktopEnabled = result.features?.desktop === true;
+				browserEnabled = result.features?.browser === true;
+			}
 		} catch {
 			/* Files remain available when interactive terminals are disabled. */
 		}
@@ -516,18 +540,29 @@
 	}
 
 	$: if (chatId !== tabsChatId) {
-		if (tabsChatId !== null || !chatId) {
+		if (tabsChatId || !chatId) {
 			tabs = emptyTabs();
+			hasOpenedTabs = false;
 			dirtyFiles = {};
 			fileContexts = {};
-			initialized = false;
 			commentTarget = {};
 		}
 		tabsChatId = chatId;
 	}
-	$: if ($showTabs === true && !initialized && showFilesTab) {
-		initialized = true;
-		openFiles();
+	$: if ($showTabs === true && !tabs.tabs.length) {
+		const options = [
+			...availableViews.filter((view) => view.available).map((view) => () => {
+				if (view.kind === 'files') openFiles();
+				else openFeature(view.kind as 'artifacts' | 'preview' | 'voice' | 'comments');
+			}),
+			...(terminalFilesAvailable ? [newFile] : []),
+			...(terminalEnabled ? [newTerminal] : []),
+			...(browserEnabled ? [openBrowser] : []),
+			...(desktopEnabled ? [openDesktop] : [])
+		];
+		if (terminalFilesAvailable || (!hasOpenedTabs && showFilesTab)) openFiles();
+		else if (options.length === 1) options[0]();
+		hasOpenedTabs = true;
 	}
 	$: if ($showTabs === 'files' && showFilesTab) openFiles();
 	$: if (
@@ -689,9 +724,7 @@
 	class:hidden={!$showTabs || !panelTarget}
 	use:placePanel={$showTabs ? panelTarget : null}
 	class="h-full w-full min-h-0 flex flex-col"
-	style:--chat-tabs-dark-background={largeScreen
-		? 'var(--color-gray-900)'
-		: 'var(--color-gray-850)'}
+	style:--chat-tabs-dark-background={'var(--color-gray-900)'}
 	id="controls-container"
 >
 	<div class="flex items-center px-2 pt-1 pb-1 gap-1 shrink-0 select-none">
@@ -757,15 +790,23 @@
 				>
 				<div slot="content">
 					<DropdownMenu className="w-48">
+						{#if showFilesTab && !tabs.tabs.some((tab) => tab.id === ($selectedTerminalId ? `files:${$selectedTerminalId}` : 'files'))}
+							<button on:click={() => openFiles()}
+								><Icon name="folder" size={14} />{$i18n.t('Files')}</button
+							>
+						{/if}
 						{#if terminalFilesAvailable}<button on:click={newFile}
 								><Icon name="page" size={14} />{$i18n.t('New File')}</button
 							>{/if}
 						{#if terminalEnabled}<button on:click={newTerminal}
 								><Icon name="terminal" size={14} />{$i18n.t('New Terminal')}</button
 							>{/if}
-						<button on:click={() => openBrowser()}
-							><Icon name="browser" size={14} />{$i18n.t('Browser')}</button
-						>
+						{#if browserEnabled}<button on:click={() => openBrowser()}
+								><Icon name="browser" size={14} />{$i18n.t('Browser')}</button
+							>{/if}
+						{#if desktopEnabled}<button on:click={openDesktop}
+								><Icon name="monitor" size={14} />{$i18n.t('Desktop')}</button
+							>{/if}
 						{#each availableViews.filter((view) => view.kind !== 'files' && view.kind !== 'voice' && view.available) as view}
 							<button
 								on:click={() =>
@@ -820,6 +861,13 @@
 							onCountChange={setCommentCount}
 						/>
 					{/key}
+				{:else if tab.kind === 'desktop' && tab.connection}
+					<Desktop
+						connection={tab.connection}
+						{chatId}
+						active={!!$showTabs && tabs.activeId === tab.id}
+						overlay={dragged}
+					/>
 				{:else if tab.kind === 'browser'}
 					<Browser
 						baseUrl={tab.browserBaseUrl ?? ''}
@@ -827,6 +875,7 @@
 						{chatId}
 						active={!!$showTabs && tabs.activeId === tab.id}
 						initialUrl={tab.path ?? ''}
+						onOpenBrowser={(url) => openBrowser(undefined, tab.terminalId, tab.browserBaseUrl, url)}
 						overlay={dragged}
 						onNavigate={(path, label) => {
 							tabs = {
@@ -951,7 +1000,7 @@
 				panelStyle={$mobile ? panelStyle : ''}
 				backdropStyle={$mobile ? backdropStyle : ''}
 				swipeSide={$mobile ? 'right' : undefined}
-				className="min-h-[100dvh] !bg-white dark:!bg-gray-850"
+				className="min-h-[100dvh] !bg-white dark:!bg-gray-900"
 			>
 				<div use:preservePanel bind:this={panelTarget} class="h-[100dvh] flex flex-col"></div>
 			</Drawer>
