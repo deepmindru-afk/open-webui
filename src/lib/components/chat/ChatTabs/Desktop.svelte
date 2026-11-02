@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getContext, onMount, tick } from 'svelte';
 	import NativeDesktop from './NativeDesktop.svelte';
+	import DesktopAudio from './DesktopAudio.svelte';
 	import { toast } from 'svelte-sonner';
 	import type RFB from '@novnc/novnc';
 	import Icon from '../FileNav/Icon.svelte';
@@ -19,6 +20,7 @@
 	let surface: HTMLDivElement;
 	let native: NativeDesktop;
 	let transport = 'vnc';
+	let audioAvailable = false;
 	const send = (message: Record<string, unknown>) => {
 		if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 	};
@@ -64,9 +66,14 @@
 		error = '';
 		status = $i18n.t('Connecting…');
 		try {
-			const info = await terminalRequest(connection, chatId, '/desktop');
+			const info = await terminalRequest<{ transport?: string; audio?: boolean }>(
+				connection,
+				chatId,
+				'/desktop'
+			);
 			if (version !== generation) return;
 			transport = info.transport ?? 'vnc';
+			audioAvailable = info.audio === true;
 			await tick();
 			if (version !== generation) return;
 			if (transport === 'frames') {
@@ -192,12 +199,15 @@
 		<div
 			class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/90 px-4 text-center text-sm text-gray-500 dark:bg-gray-900/90"
 		>
-			<span>{error || status}</span>
+			<span class={error ? '' : 'text-xs text-gray-400 dark:text-gray-500'}>{error || status}</span>
 			{#if error}<button
 					class="text-gray-700 hover:text-black dark:text-gray-300 dark:hover:text-white"
 					on:click={connect}>{$i18n.t('Retry')}</button
 				>{/if}
 		</div>
+	{/if}
+	{#if audioAvailable && active && !status && !error}
+		<DesktopAudio {connection} {chatId} {fullscreenEnabled} />
 	{/if}
 	{#if fullscreenEnabled}
 		<button
