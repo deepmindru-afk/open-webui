@@ -197,16 +197,20 @@ export const artifactContents = writable(null);
 export const embed = writable(null);
 
 export const temporaryChatEnabled = writable(false);
-export const openTemporaryChatIds = writable<Set<string>>(new Set());
+export const openSideChatIds = writable<Set<string>>(new Set());
 export const sideChatRequest = writable<{ parentId: string; prompt: string } | null>(null);
 
-// Transient one-shot event from the desktop shell (Spotlight, drag-and-drop, etc.).
-// Set by +layout.svelte, consumed and cleared by Chat.svelte.
-export type DesktopEventFile = { name: string; mimeType: string; dataUrl: string };
-export type DesktopEvent = {
-	type: string;
-	data?: any;
+export type QueryData = {
+	query: string;
+	files: { name: string; mimeType: string; dataUrl: string }[];
 };
+export type TetherEvent = { type: 'query'; data: QueryData } | { type: 'voice' };
+// The legacy call shortcut is separate from acknowledged Tether events.
+export type DesktopEvent =
+	| { type: 'call'; handoff?: never }
+	| (TetherEvent & {
+			handoff: { isCurrent: () => boolean; complete: (error?: string) => void };
+	  });
 export const desktopEvent: Writable<DesktopEvent | null> = writable(null);
 
 export const isLastActiveTab = writable(true);
@@ -373,6 +377,10 @@ type Document = {
 };
 
 type Config = {
+	metadata?: {
+		auth_logo_position?: 'center' | 'top-right';
+		login_footer?: string;
+	};
 	audio?: {
 		realtime?: { enabled: boolean; model: string; voice: string };
 		stt: { engine: string };
