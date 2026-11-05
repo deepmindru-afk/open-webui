@@ -125,14 +125,13 @@
 			: '';
 	$: if (fullWidth !== tabs.tabs.some((tab) => tab.id === mainChatTabId)) {
 		tabs = setFullWidthTabs(tabs, fullWidth, title);
-		if (fullWidth) void tick().then(() => document.getElementById(domId(tabs.activeId))?.focus());
 	}
 	const toggleLayout = async () => {
 		if (panelTarget) releasePanel(panelTarget);
 		expanded = !expanded;
 		localStorage.setItem('chatTabsLayout', expanded ? 'full' : 'side');
 		await tick();
-		if (!fullWidth) document.getElementById('chat-tabs-layout-toggle')?.focus();
+		document.getElementById(fullWidth ? domId(tabs.activeId) : 'chat-tabs-layout-toggle')?.focus();
 	};
 
 	let largeScreen = false;
@@ -826,10 +825,10 @@
 		}
 		tabsChatId = chatId;
 	}
-	$: if ($showTabs === true && !tabs.tabs.length) {
+	$: if (mounted && !fullWidth && $showTabs === true && !tabs.tabs.length) {
 		const options = [
 			...availableViews
-				.filter((view) => view.available)
+				.filter((view) => view.available && view.kind !== 'side')
 				.map((view) => () => {
 					if (view.kind === 'files') openFiles();
 					else openFeature(view.kind as 'artifacts' | 'preview' | 'voice' | 'comments' | 'side');
@@ -841,7 +840,7 @@
 		];
 		if (terminalFilesAvailable || (!hasOpenedTabs && showFilesTab)) openFiles();
 		else if (options.length === 1) options[0]();
-		else if (!options.length) showTabs.set(false);
+		else if (!options.length && !canSideChat) showTabs.set(false);
 		hasOpenedTabs = true;
 	}
 	$: if (
