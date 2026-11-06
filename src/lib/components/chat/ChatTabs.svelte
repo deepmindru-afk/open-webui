@@ -1,9 +1,9 @@
 <script lang="ts">
 	import type { TerminalContext } from '$lib/types';
 	import type { GitStatus } from '$lib/apis/terminal/git';
-	let gitStatus: GitStatus | null = null;
-	let gitDiffMode: 'unified' | 'split' = 'unified';
-	let gitHideWhitespace = false;
+	let fileGitStatuses: Record<string, GitStatus | null> = {};
+	let fileGitDiffModes: Record<string, 'unified' | 'split'> = {};
+	let fileGitHideWhitespace: Record<string, boolean> = {};
 	import { onMount, onDestroy, tick, getContext } from 'svelte';
 	import Sortable from 'sortablejs';
 	import { beforeNavigate, goto } from '$app/navigation';
@@ -110,7 +110,6 @@
 	export let mainChatActive = false;
 	export let mainChatStyle = '';
 	export let mainChatGroupId = '';
-	let footerHeight = 0;
 	let paneCanvas: HTMLDivElement;
 	export let title = '';
 	export let tabTitleEditor: import('svelte').Snippet | undefined = undefined;
@@ -135,8 +134,8 @@
 	let viewportWidth = 0;
 
 	let tabs = emptyTabs();
-	const paneStyle = (rect: PanelRect, header = 0, footer = 0) =>
-		`position:absolute;left:${rect.left * 100}%;top:calc((100% - ${footer}px) * ${rect.top} + ${header}px);width:${rect.width * 100}%;height:calc((100% - ${footer}px) * ${rect.height} - ${header}px);`;
+	const paneStyle = (rect: PanelRect, header = 0) =>
+		`position:absolute;left:${rect.left * 100}%;top:calc(100% * ${rect.top} + ${header}px);width:${rect.width * 100}%;height:calc(100% * ${rect.height} - ${header}px);`;
 	const focusGroup = (id: string) => {
 		const group = tabs.groups.find((group) => group.id === id);
 		if (group?.activeId) tabs = activateTab(tabs, group.activeId);
@@ -226,17 +225,6 @@
 			? tabs.tabs.find((tab) => tab.id === tabs.history.at(-1))
 			: activeTab;
 	$: terminalContext = (contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null;
-	// Resolve before reactive Files-tab creation, which can run later in the same update.
-	$: gitConnection =
-		mounted &&
-		$config?.features?.enable_tool_servers &&
-		(contextTab?.connection ??
-			resolveTerminalConnection(
-				contextTab?.terminalId ?? $selectedTerminalId,
-				$terminalServers ?? [],
-				directTerminals,
-				localStorage.token ?? ''
-			));
 	$: if (activeTabId && panelTarget) {
 		const id = activeTabId;
 		void tick().then(() =>
@@ -815,6 +803,9 @@
 			hasOpenedTabs = false;
 			dirtyFiles = {};
 			fileContexts = {};
+			fileGitStatuses = {};
+			fileGitDiffModes = {};
+			fileGitHideWhitespace = {};
 			commentTarget = {};
 		}
 		tabsChatId = chatId;
@@ -988,7 +979,7 @@
 	$: mainChatGroupId = tabs.groups.find((group) => group.tabIds.includes(mainChatTabId))?.id ?? '';
 	$: mainChatStyle =
 		fullWidth && positions.groups[mainChatGroupId]
-			? paneStyle(positions.groups[mainChatGroupId], 36, footerHeight)
+			? paneStyle(positions.groups[mainChatGroupId], 36)
 			: '';
 </script>
 
@@ -1237,30 +1228,51 @@
 						}}
 					/>
 				{:else if (tab.kind === 'files' || tab.kind === 'file') && tab.terminalId}
-					<FileNav
-						gitStatus={gitConnection && gitConnection.selector === tab.terminalId
-							? gitStatus
-							: null}
-						gitConnection={gitConnection && gitConnection.selector === tab.terminalId
-							? gitConnection
-							: null}
-						{gitDiffMode}
-						{gitHideWhitespace}
-						bind:this={fileViews[tab.id]}
-						bind:dirty={dirtyFiles[tab.id]}
-						terminalId={tab.terminalId}
-						initialFile={tab.kind === 'file' ? { path: tab.path!, page: tab.page } : null}
-						initialDirectory={tab.kind === 'files' ? (tab.path ?? null) : null}
-						active={!!$showTabs && visibleTabIds.has(tab.id)}
-						manageFileRequests={false}
-						showTerminalDock={tab.kind === 'files'}
-						onOpenFile={(path, page) => openFile(path, tab.terminalId!, page)}
-						onBrowseDirectory={(path) => openFiles(tab.terminalId, path)}
-						{onAskFile}
-						overlay={dragged}
-						{chatId}
-						bind:terminalContext={fileContexts[tab.id]}
-					/>
+					{@const fileConnection = mounted
+						? resolveTerminalConnection(
+								tab.terminalId,
+								$terminalServers ?? [],
+								directTerminals,
+								localStorage.token ?? ''
+							)
+						: null}
+					<div class="flex h-full min-h-0 flex-col">
+						<div class="min-h-0 flex-1">
+							<FileNav
+								gitStatus={fileGitStatuses[tab.terminalId] ?? null}
+								gitConnection={fileConnection}
+								gitDiffMode={fileGitDiffModes[tab.terminalId] ?? 'unified'}
+								gitHideWhitespace={fileGitHideWhitespace[tab.terminalId] ?? false}
+								bind:this={fileViews[tab.id]}
+								bind:dirty={dirtyFiles[tab.id]}
+								terminalId={tab.terminalId}
+								initialFile={tab.kind === 'file' ? { path: tab.path!, page: tab.page } : null}
+								initialDirectory={tab.kind === 'files' ? (tab.path ?? null) : null}
+								active={!!$showTabs && visibleTabIds.has(tab.id)}
+								manageFileRequests={false}
+								showTerminalDock={tab.kind === 'files'}
+								onOpenFile={(path, page) => openFile(path, tab.terminalId!, page)}
+								onBrowseDirectory={(path) => openFiles(tab.terminalId, path)}
+								{onAskFile}
+								overlay={dragged}
+								{chatId}
+								bind:terminalContext={fileContexts[tab.id]}
+							/>
+						</div>
+						{#if tab.kind === 'files' && fileConnection}
+							<GitBar
+								bind:status={fileGitStatuses[tab.terminalId]}
+								bind:diffMode={fileGitDiffModes[tab.terminalId]}
+								bind:hideWhitespace={fileGitHideWhitespace[tab.terminalId]}
+								connection={fileConnection}
+								{chatId}
+								directory={fileContexts[tab.id]?.currentDirectory ?? tab.path ?? '.'}
+								active={!!$showTabs && visibleTabIds.has(tab.id)}
+								onOpenFile={(path) => openFile(path, tab.terminalId!)}
+								onOpenDirectory={(path) => openFiles(tab.terminalId, path)}
+							/>
+						{/if}
+					</div>
 				{:else if tab.kind === 'files' && codeInterpreterEnabled}
 					<PyodideFileNav overlay={dragged} />
 				{/if}
@@ -1271,25 +1283,6 @@
 			>
 				{$i18n.t('Open a tab using the + menu.')}
 			</div>{/if}
-	</div>
-	<div
-		bind:clientHeight={footerHeight}
-		class="min-w-0 shrink-0 pointer-events-auto"
-		class:hidden={tabs.activeId === mainChatTabId}
-	>
-		{#if gitConnection && tabs.tabs.length}
-			<GitBar
-				bind:status={gitStatus}
-				bind:diffMode={gitDiffMode}
-				bind:hideWhitespace={gitHideWhitespace}
-				connection={gitConnection}
-				{chatId}
-				directory={terminalContext?.currentDirectory ?? '.'}
-				active={!!$showTabs}
-				onOpenFile={(path) => openFile(path, gitConnection.selector)}
-				onOpenDirectory={(path) => openFiles(gitConnection.selector, path)}
-			/>
-		{/if}
 	</div>
 </div>
 

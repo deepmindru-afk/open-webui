@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolveToolApprovalMode } from '$lib/utils/toolPermissions';
 	import { getContext, onMount, tick } from 'svelte';
 	import { v4 as uuidv4 } from 'uuid';
 	import {
@@ -26,6 +27,7 @@
 	import { applyResponseStreamEvent } from '../Messages/structuredOutput';
 	import Messages from '../Messages.svelte';
 	import MessageInput from '../MessageInput.svelte';
+	import FilesOverlay from '../MessageInput/FilesOverlay.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import ElicitationDialog from '../ElicitationDialog.svelte';
 	import {
@@ -43,6 +45,7 @@
 	export let modelId: string;
 	export let systemPrompt = '';
 	const i18n = getContext<any>('i18n');
+	let dragged = false;
 	const originalChatId = parentChatId;
 	$: sideChatAllowed =
 		$user?.role === 'admin' ||
@@ -132,8 +135,10 @@
 		codeInterpreterEnabled = defaultFeature('code_interpreter');
 	};
 	$: if (!id && sideModelId) void applyModelDefaults(sideModelId);
-	$: toolApprovalMode =
-		(params.tool_approval_mode ?? $settings.params?.tool_approval_mode) === 'ask' ? 'ask' : 'full';
+	$: toolApprovalMode = resolveToolApprovalMode(
+		params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode,
+		$config?.features?.enable_tool_permissions_auto ?? false
+	);
 	let interactions: { id: string; type: string; data: any; callback: (value: any) => void }[] = [];
 	$: interaction = interactions[0];
 	const resolveInteraction = (pending: typeof interaction, value: any) => {
@@ -550,8 +555,9 @@
 
 <div
 	id={`${inputId}-pane`}
-	class="flex h-full min-h-0 min-w-0 w-full flex-col @container overflow-hidden"
+	class="relative flex h-full min-h-0 min-w-0 w-full flex-col @container overflow-hidden"
 >
+	<FilesOverlay show={dragged} />
 	<div
 		id={messagesContainerId}
 		bind:this={scroller}
@@ -603,6 +609,7 @@
 		{#if canSend}
 			<MessageInput
 				bind:this={input}
+				bind:dragged
 				bind:prompt={draft}
 				bind:autoScroll
 				chatId={id}

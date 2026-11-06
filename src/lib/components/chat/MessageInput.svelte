@@ -167,6 +167,7 @@
 	export let onTemporaryChange: ((value: boolean) => void) | null = null;
 	$: isTemporary = temporary ?? $temporaryChatEnabled;
 	export let terminalContext: TerminalContext | null = null;
+	export let fullWidthTabs = false;
 	export let terminalSelectionEnabled = true;
 	export let contextUsage = null;
 	export let contextCompactionEnabled = false;
@@ -913,19 +914,12 @@
 		modelCapabilitiesById
 	);
 
-	let terminalCapableModels = [];
-	$: terminalCapableModels = getCapableModelIds(
-		selectedModelIds,
-		'terminal',
-		modelCapabilitiesById
-	);
 	$: hasDirectToolServerAccess =
 		$config?.features?.enable_direct_integrations &&
 		($_user?.role === 'admin' || ($_user?.permissions?.features?.direct_tool_servers ?? true));
 	$: showTerminalSelector =
 		terminalSelectionEnabled &&
 		$config?.features?.enable_tool_servers &&
-		terminalCapableModels.length > 0 &&
 		(($terminalServers ?? []).some((t) => t.id) ||
 			(hasDirectToolServerAccess &&
 				(($terminalServers ?? []).some((t) => !t.id) ||
@@ -993,17 +987,6 @@
 	// Disable code interpreter when terminal is active (mutually exclusive)
 	$: if ($selectedTerminalId && codeInterpreterEnabled) {
 		codeInterpreterEnabled = false;
-	}
-
-	// Clear selected terminal when model doesn't support terminal
-	$: if (
-		terminalSelectionEnabled &&
-		inputId === 'chat-input' &&
-		$selectedTerminalId &&
-		selectedModelIds.length > 0 &&
-		terminalCapableModels.length === 0
-	) {
-		selectedTerminalId.set(null);
 	}
 
 	const scrollToBottom = () => {
@@ -1406,11 +1389,16 @@
 		}
 	};
 
-	const isComposerDrop = (event: DragEvent) =>
-		event.target instanceof Element &&
-		event.target.closest('[data-composer-id]')?.getAttribute('data-composer-id') === inputId;
+	const isAttachmentDrop = (event: DragEvent) => {
+		if (!(event.target instanceof Element)) return false;
+		const composer = event.target.closest('[data-composer-id]');
+		if (composer) return composer.getAttribute('data-composer-id') === inputId;
+		// Files can land anywhere in this chat's dropzone. Sidebar items still target
+		// the composer so dragging a chat into a split panel keeps working.
+		return event.dataTransfer?.types.includes('Files') ?? false;
+	};
 	const onDragOver = (e: DragEvent) => {
-		if (!isComposerDrop(e)) {
+		if (!isAttachmentDrop(e)) {
 			dragged = false;
 			return;
 		}
@@ -1437,7 +1425,7 @@
 	};
 
 	const onDrop = async (e: DragEvent) => {
-		if (!isComposerDrop(e)) return;
+		if (!isAttachmentDrop(e)) return;
 		e.preventDefault();
 		console.log(e);
 
@@ -2852,6 +2840,7 @@
 										<!-- Terminal Server Selector -->
 										{#if showTerminalSelector}
 											<TerminalMenu
+												{fullWidthTabs}
 												bind:show={showTerminalMenu}
 												disabled={generating ||
 													(!!history?.currentId &&

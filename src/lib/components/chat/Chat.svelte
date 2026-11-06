@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolveToolApprovalMode } from '$lib/utils/toolPermissions';
 	import type { TerminalContext } from '$lib/types';
 	import {
 		estimateTokens,
@@ -19,6 +20,7 @@
 	import { get, writable, type Unsubscriber, type Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { getModels } from '$lib/apis';
 	import equal from 'fast-deep-equal';
 
 	import {
@@ -140,6 +142,7 @@
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
 	import Placeholder from './Placeholder.svelte';
+	import FilesOverlay from './MessageInput/FilesOverlay.svelte';
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
 	import Modal from '../common/Modal.svelte';
@@ -245,6 +248,7 @@
 	let contextUsage = null;
 
 	const normalizeSelectedModels = (modelIds: string[] = []) => {
+		if (modelIds.some((id) => id.startsWith('agent:'))) return modelIds;
 		const selected = resolveDefaultModelIds(
 			$models,
 			modelIds,
@@ -527,13 +531,16 @@
 	let currentDraftKey = '';
 
 	// Chat parameters own the approval mode; chats without an override use the user default.
-	$: toolApprovalMode =
-		(params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode) === 'ask'
-			? 'ask'
-			: 'full';
+	$: toolApprovalMode = resolveToolApprovalMode(
+		params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode,
+		$config?.features?.enable_tool_permissions_auto ?? false
+	);
 
 	const handleToolApprovalModeChange = async (mode: string) => {
-		const tool_approval_mode = mode === 'ask' ? 'ask' : 'full';
+		const tool_approval_mode = resolveToolApprovalMode(
+			mode,
+			$config?.features?.enable_tool_permissions_auto ?? false
+		);
 		browserApprovalMode = tool_approval_mode;
 		params = {
 			...params,
@@ -1077,11 +1084,30 @@
 	}
 
 	let lastTerminalSkillSelector: string | null = null;
+	let agentDiscovery = 0;
+	const refreshAgentModels = async () => {
+		const generation = ++agentDiscovery;
+		try {
+			const available = await getModels(
+				localStorage.token,
+				$config?.features?.enable_direct_connections ? ($settings?.directConnections ?? null) : null
+			);
+			if (generation === agentDiscovery) {
+				models.set(available);
+				selectedModels = selectedModels.map((id) =>
+					id.startsWith('agent:') && !available.some((model) => model.id === id) ? '' : id
+				);
+			}
+		} catch (error) {
+			console.error('Agent model discovery failed', error);
+		}
+	};
 	$: if ($selectedTerminalId !== lastTerminalSkillSelector) {
 		terminalContext = null;
 		selectedSkillIds = selectedSkillIds.filter((id) => !id.startsWith('terminal:'));
 		terminalSkills.set([]);
 		lastTerminalSkillSelector = $selectedTerminalId;
+		void refreshAgentModels();
 	}
 
 	let defaultsModelIds: string[] = [];
@@ -1117,7 +1143,8 @@
 			const defaultFeature = (feature: 'web_search' | 'image_generation' | 'code_interpreter') =>
 				featureAvailable(feature) &&
 				currentModels.every((model) => model.info?.meta?.defaultFeatureIds?.includes(feature));
-			const terminalId = currentModels[0]?.info?.meta?.terminalId;
+			const folderTerminalId = !history.currentId ? $selectedFolder?.data?.terminal_id : null;
+			const terminalId = folderTerminalId || currentModels[0]?.info?.meta?.terminalId;
 			const defaults: Record<string, any> = {
 				selectedToolIds: [
 					...new Set(
@@ -1148,7 +1175,8 @@
 				terminalId:
 					terminalId &&
 					isTerminalAvailable(terminalId) &&
-					currentModels.every((model) => model.info?.meta?.terminalId === terminalId)
+					(folderTerminalId ||
+						currentModels.every((model) => model.info?.meta?.terminalId === terminalId))
 						? terminalId
 						: $selectedTerminalId
 			};
@@ -1974,8 +2002,13 @@
 
 		const selectedFolderSubscribe = selectedFolder.subscribe(async (folder) => {
 			await tick();
-			// Folder default models apply to new chats only.
+			// Folder defaults apply to new chats only.
 			if (!history.currentId && folder) {
+				if (folder.data?.terminal_id) {
+					selectedTerminalId.set(folder.data.terminal_id);
+					await refreshAgentModels();
+					if (history.currentId || $selectedFolder?.id !== folder.id) return;
+				}
 				const folderModels = normalizeSelectedModels(folder.data?.model_ids ?? []);
 				if (!equal(selectedModels, folderModels)) {
 					selectedModels = folderModels;
@@ -2443,6 +2476,7 @@
 				return {
 					chatId: isTemporaryChatId($chatId) ? undefined : $chatId || undefined,
 					modelId: model && !('direct' in model && model.direct) ? model.id : '',
+					terminalId: $selectedTerminalId || undefined,
 					voiceModel: $config?.audio?.realtime?.model,
 					voice: model?.info?.meta?.voice?.voice || $config?.audio?.realtime?.voice,
 					messages: createMessagesList(history, history.currentId).map((message) => {
@@ -2737,12 +2771,16 @@
 			}
 
 			// Unavailable models filtering
-			selectedModels = selectedModels.filter((modelId) =>
-				$models.map((m) => m.id).includes(modelId)
+			selectedModels = selectedModels.filter(
+				(modelId) => modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId)
 			);
 		} else {
 			if ($selectedFolder) {
 				// Folder defaults are explicit; never inherit a previous chat's selection.
+				if ($selectedFolder.data?.terminal_id) {
+					selectedTerminalId.set($selectedFolder.data.terminal_id);
+					await refreshAgentModels();
+				}
 				selectedModels = normalizeSelectedModels($selectedFolder.data?.model_ids ?? []);
 			} else {
 				if (sessionStorage.selectedModels) {
@@ -2919,7 +2957,7 @@
 		}
 
 		selectedModels = selectedModels.map((modelId) =>
-			$models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 
 		await tick();
@@ -2987,11 +3025,18 @@
 					(chatContent?.models ?? undefined) !== undefined
 						? chatContent.models
 						: [chatContent.models ?? ''];
+				if (selectedModels[0]?.startsWith('agent:')) {
+					const terminalId = decodeURIComponent(selectedModels[0].split(':')[1]);
+					if (isTerminalAvailable(terminalId)) {
+						selectedTerminalId.set(terminalId);
+						await refreshAgentModels();
+					}
+				}
 
 				// An empty model list is not evidence that the chat's models are gone.
 				if ($models.length > 0) {
-					selectedModels = selectedModels.filter((modelId) =>
-						$models.map((m) => m.id).includes(modelId)
+					selectedModels = selectedModels.filter(
+						(modelId) => modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId)
 					);
 				}
 
@@ -3945,7 +3990,7 @@
 			return { status: 'rejected' };
 
 		const _selectedModels = selectedModels.map((modelId) =>
-			$models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 
 		if (!equal(selectedModels, _selectedModels)) {
@@ -4520,7 +4565,11 @@
 						: $config?.features?.enable_tools
 				),
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				terminal_id: terminalEnabled && requestTerminalId ? requestTerminalId : undefined,
+				terminal_id: terminalEnabled && requestTerminalId ? requestTerminalId : null,
+				terminal_cwd:
+					!_chatId && terminalContext?.terminalId === requestTerminalId
+						? terminalContext.currentDirectory
+						: undefined,
 				tool_servers: $config?.features?.enable_tool_servers
 					? [
 							...($toolServers ?? []).filter(
@@ -5327,6 +5376,7 @@
 						<Spinner className="size-5" />
 					</div>
 				{:else}
+					<FilesOverlay show={dragged} />
 					{#if embedded}
 						<div
 							class="h-8 shrink-0 flex items-center justify-between gap-2 border-b border-gray-50/80 px-3 pb-1 text-gray-700 dark:border-gray-850/40 dark:text-gray-200"
@@ -5496,6 +5546,7 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
+										{fullWidthTabs}
 										{terminalContext}
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5597,6 +5648,7 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
+										{fullWidthTabs}
 										{terminalContext}
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5667,6 +5719,7 @@
 						{:else}
 							<div class="flex items-center h-full">
 								<Placeholder
+									{fullWidthTabs}
 									chatId={$chatId}
 									{terminalContext}
 									callActive={!!(bridge?.connected || bridge?.connecting)}

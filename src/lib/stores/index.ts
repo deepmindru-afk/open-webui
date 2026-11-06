@@ -216,13 +216,22 @@ export const desktopEvent: Writable<DesktopEvent | null> = writable(null);
 export const isLastActiveTab = writable(true);
 export const playingNotificationSound = writable(false);
 
-export type Model = OpenAIModel | OllamaModel;
+export type Model = OpenAIModel | OllamaModel | AgentModel;
+
+export interface AgentModel extends BaseModel {
+	owned_by: 'agent';
+	agent: {
+		terminal_id: string;
+		provider: 'codex' | 'claude-code' | 'cursor' | 'grok' | 'opencode' | 'cline' | 'gemini' | 'pi';
+		model: string;
+	};
+}
 
 type BaseModel = {
 	id: string;
 	name: string;
 	info?: ModelConfig;
-	owned_by: 'ollama' | 'openai' | 'arena';
+	owned_by: 'ollama' | 'openai' | 'arena' | 'agent';
 };
 
 export interface OpenAIModel extends BaseModel {
@@ -377,6 +386,13 @@ type Document = {
 };
 
 type Config = {
+	file?: {
+		max_size?: number | null;
+		max_count?: number | null;
+		full_context?: boolean;
+		full_text_char_threshold?: number;
+		image_compression?: { width?: number | null; height?: number | null };
+	};
 	metadata?: {
 		auth_logo_position?: 'center' | 'top-right';
 		login_footer?: string;
@@ -416,6 +432,7 @@ type Config = {
 		enable_admin_analytics: boolean;
 		enable_context_compaction?: boolean;
 		enable_tool_permissions?: boolean;
+		enable_tool_permissions_auto?: boolean;
 		enable_community_sharing: boolean;
 		enable_memories: boolean;
 		enable_notes?: boolean;
