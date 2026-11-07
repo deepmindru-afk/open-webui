@@ -1196,8 +1196,8 @@
 			return;
 		loading = false;
 
-		// Set working directory on the terminal server (fire-and-forget)
-		if (!onSelectDirectory && !initialFile)
+		// Browsing an existing chat must not change its execution directory.
+		if (!chatId && !onSelectDirectory && !initialFile)
 			setCwd(terminal.url, terminal.key, directory, chatId ?? undefined);
 
 		if (result === null) {
@@ -2922,11 +2922,11 @@
 							<Spinner className="size-3.5 text-gray-400 dark:text-gray-500" />
 						</div>
 					{:else if matchError}
-						<div class="flex items-center justify-center py-12">
+						<div class="flex h-full items-center justify-center p-6 text-center">
 							<div class="text-xs text-gray-400 dark:text-gray-500">{matchError}</div>
 						</div>
 					{:else if !matchResults?.length}
-						<div class="flex items-center justify-center py-12">
+						<div class="flex h-full items-center justify-center p-6 text-center">
 							<div class="text-xs text-gray-400 dark:text-gray-500">{$i18n.t('No matches')}</div>
 						</div>
 					{:else}
@@ -3037,7 +3037,9 @@
 						{/if}
 					{/if}
 				{:else if uploading}
-					<div class="flex items-center justify-center gap-2 p-4 text-xs text-gray-500">
+					<div
+						class="flex h-full items-center justify-center gap-2 p-4 text-center text-xs text-gray-500"
+					>
 						<Spinner className="size-4" />
 						{$i18n.t('Uploading...')}
 					</div>
@@ -3046,9 +3048,9 @@
 						<Spinner className="size-3.5 text-gray-400 dark:text-gray-500" />
 					</div>
 				{:else if error}
-					<div class="p-4 text-xs">{error}</div>
+					<div class="flex h-full items-center justify-center p-4 text-center text-xs">{error}</div>
 				{:else if visibleEntries.length === 0 && !creatingFolder && !creatingFile}
-					<div class="flex items-center justify-center py-12">
+					<div class="flex h-full items-center justify-center p-6 text-center">
 						<div class="text-xs text-gray-400 dark:text-gray-500">
 							{$i18n.t('This folder is empty')}
 						</div>

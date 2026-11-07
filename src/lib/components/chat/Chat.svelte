@@ -1130,12 +1130,21 @@
 		}
 	};
 	$: if ($selectedTerminalId !== lastTerminalSkillSelector) {
-		terminalContext = null;
+		if (terminalContext?.terminalId !== $selectedTerminalId) terminalContext = null;
 		selectedSkillIds = selectedSkillIds.filter((id) => !id.startsWith('terminal:'));
 		terminalSkills.set([]);
 		lastTerminalSkillSelector = $selectedTerminalId;
 		void refreshAgentModels();
 	}
+
+	const applyFolderTerminal = (folder: any) => {
+		if (!folder) return;
+		const terminalId = folder.data?.terminal_id || null;
+		selectedTerminalId.set(terminalId);
+		terminalContext = terminalId
+			? { terminalId, currentDirectory: folder.data?.working_directory ?? '' }
+			: null;
+	};
 
 	let defaultsModelIds: string[] = [];
 	let modelDefaults: Record<string, any> | null = null;
@@ -1171,7 +1180,10 @@
 				featureAvailable(feature) &&
 				currentModels.every((model) => model.info?.meta?.defaultFeatureIds?.includes(feature));
 			const folderTerminalId = !history.currentId ? $selectedFolder?.data?.terminal_id : null;
-			const terminalId = folderTerminalId || currentModels[0]?.info?.meta?.terminalId;
+			const terminalId =
+				!history.currentId && $selectedFolder
+					? folderTerminalId
+					: currentModels[0]?.info?.meta?.terminalId;
 			const defaults: Record<string, any> = {
 				selectedToolIds: [
 					...new Set(
@@ -2031,8 +2043,8 @@
 			await tick();
 			// Folder defaults apply to new chats only.
 			if (!history.currentId && folder) {
+				applyFolderTerminal(folder);
 				if (folder.data?.terminal_id) {
-					selectedTerminalId.set(folder.data.terminal_id);
 					await refreshAgentModels();
 					if (history.currentId || $selectedFolder?.id !== folder.id) return;
 				}
@@ -2805,8 +2817,8 @@
 		} else {
 			if ($selectedFolder) {
 				// Folder defaults are explicit; never inherit a previous chat's selection.
+				applyFolderTerminal($selectedFolder);
 				if ($selectedFolder.data?.terminal_id) {
-					selectedTerminalId.set($selectedFolder.data.terminal_id);
 					await refreshAgentModels();
 				}
 				selectedModels = normalizeSelectedModels($selectedFolder.data?.model_ids ?? []);
@@ -2885,6 +2897,9 @@
 			messages: {},
 			currentId: null
 		};
+
+		// Apply folder defaults after restoring the draft and model defaults.
+		applyFolderTerminal($selectedFolder);
 
 		chatFiles = [];
 		params = {};
@@ -5584,7 +5599,7 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
-										{terminalContext}
+										bind:terminalContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
 										callActive={!!(bridge?.connected || bridge?.connecting)}
@@ -5685,7 +5700,7 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
-										{terminalContext}
+										bind:terminalContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
 										callActive={!!(bridge?.connected || bridge?.connecting)}
@@ -5756,7 +5771,7 @@
 							<div class="flex items-center h-full">
 								<Placeholder
 									chatId={$chatId}
-									{terminalContext}
+									bind:terminalContext
 									callActive={!!(bridge?.connected || bridge?.connecting)}
 									callEnabled={!isShared}
 									bind:selectedModelIdx

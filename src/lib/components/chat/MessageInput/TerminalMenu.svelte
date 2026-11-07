@@ -3,6 +3,8 @@
 	import { resolveTerminalConnection, type TerminalConnection } from '$lib/apis/terminal';
 	import TerminalSystemInfoModal from '../TerminalSystemInfoModal.svelte';
 	import Activity from '$lib/components/icons/Activity.svelte';
+	import WorkingDirectoryMenu from './WorkingDirectoryMenu.svelte';
+	import type { TerminalContext } from '$lib/types';
 
 	import {
 		chatId as activeChatId,
@@ -27,6 +29,9 @@
 
 	export let show = false;
 	export let disabled = false;
+	export let directoryLocked = false;
+	export let chatId: string | null = null;
+	export let terminalContext: TerminalContext | null = null;
 
 	const chatContext = (terminal: any) => terminal?.contexts?.chat ?? {};
 
@@ -124,6 +129,12 @@
 
 	$: selectedSystemTerminal = systemTerminals.find((t) => t.id === $selectedTerminalId);
 	$: selectedDirectTerminal = directTerminals.find((t) => t.url === $selectedTerminalId);
+	$: folderConnection = resolveTerminalConnection(
+		$selectedTerminalId,
+		systemTerminals,
+		directTerminals,
+		''
+	);
 	$: selectedDevice = !!selectedSystemTerminal && isDevice(selectedSystemTerminal);
 
 	$: selectedLabel =
@@ -215,7 +226,7 @@
 
 			<div slot="content">
 				<DropdownMenu
-					className="min-w-56 max-w-56 max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin"
+					className="w-60 max-w-[calc(100vw-2rem)] max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin"
 				>
 					<!-- Direct terminals (gated by permission) -->
 					{#if directTerminals.length > 0}
@@ -425,6 +436,19 @@
 			chatId={info.chatId}
 			label={info.label}
 			onClose={() => (info = null)}
+		/>
+	{/key}
+{/if}
+
+{#if folderConnection && (chatContext(selectedSystemTerminal)?.context_id !== 'chat_id' || isSavedChatId(chatId))}
+	{#key `${$user?.id}:${folderConnection.selector}:${chatId ?? ''}`}
+		<WorkingDirectoryMenu
+			connection={folderConnection}
+			{chatId}
+			userId={$user?.id ?? ''}
+			bind:terminalContext
+			locked={directoryLocked || isSavedChatId(chatId)}
+			disabled={disabled || directoryLocked || isSavedChatId(chatId)}
 		/>
 	{/key}
 {/if}

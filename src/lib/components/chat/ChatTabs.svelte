@@ -152,9 +152,11 @@
 	let tabs = emptyTabs();
 	const paneStyle = (rect: PanelRect, header = 0) =>
 		`position:absolute;left:${rect.left * 100}%;top:calc(100% * ${rect.top} + ${header}px * var(--app-text-scale, 1));width:${rect.width * 100}%;height:calc(100% * ${rect.height} - ${header}px * var(--app-text-scale, 1));`;
-	const focusGroup = (id: string) => {
+	const focusGroup = (id: string, event?: Event) => {
+		// Tab activation reads the composer's directory before changing the active context.
+		if (event?.target instanceof Element && event.target.closest('[data-panel-tab]')) return;
 		const group = tabs.groups.find((group) => group.id === id);
-		if (group?.activeId) tabs = activateTab(tabs, group.activeId);
+		if (group?.activeId && tabs.activeGroupId !== id) tabs = activateTab(tabs, group.activeId);
 	};
 	let terminalViews: Record<string, XTerminal> = {};
 	export const hasTerminals = () => tabs.tabs.some((tab) => tab.kind === 'terminal');
@@ -408,7 +410,13 @@
 		activeTab?.kind === 'chat'
 			? tabs.tabs.find((tab) => tab.id === tabs.history.at(-1))
 			: activeTab;
-	$: terminalContext = (contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null;
+	const syncTerminalContext = (context: TerminalContext | null) => {
+		if (context) terminalContext = context;
+		else if (terminalContext?.file) terminalContext = { ...terminalContext, file: null };
+	};
+	$: syncTerminalContext(
+		(contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null
+	);
 	$: if (activeTabId && panelTarget) {
 		const id = activeTabId;
 		void tick().then(() =>
@@ -422,6 +430,11 @@
 		tabs = activateTab(tabs, mainChatTabId);
 	};
 	const selectTab = (id: string) => {
+		const tab = tabs.tabs.find((tab) => tab.id === id);
+		if (tab?.kind === 'files') {
+			openFiles(tab.terminalId ?? null);
+			return;
+		}
 		tabs = activateTab(tabs, id);
 		showTabs.set(true);
 	};
@@ -434,6 +447,10 @@
 	};
 	const openFiles = (selector = $selectedTerminalId, directory?: string) => {
 		if (selector ? !terminalAccessible(selector) : !showFilesTab) return;
+		directory ??=
+			terminalContext?.terminalId === selector
+				? terminalContext.currentDirectory || undefined
+				: undefined;
 		const id = selector ? `files:${selector}` : 'files';
 		openPanel({
 			id,
@@ -442,7 +459,13 @@
 			terminalId: selector ?? undefined,
 			path: directory
 		});
-		if (directory) void fileViews[id]?.browseDirectory?.(directory);
+		const view = fileViews[id];
+		if (
+			directory &&
+			view &&
+			view.captureView()?.directory?.replace(/\/+$/, '') !== directory.replace(/\/+$/, '')
+		)
+			void view.browseDirectory(directory);
 	};
 	const openFile = (path: string, selector: string, page?: number | null) => {
 		if (!terminalAccessible(selector)) return;
@@ -1476,8 +1499,8 @@
 				role="presentation"
 				class="absolute min-h-0 min-w-0 pointer-events-none flex flex-col overflow-hidden"
 				style={paneStyle(positions.groups[group.id])}
-				on:focusin={() => focusGroup(group.id)}
-				on:pointerdown={() => focusGroup(group.id)}
+				on:focusin={(event) => focusGroup(group.id, event)}
+				on:pointerdown={(event) => focusGroup(group.id, event)}
 			>
 				{@render tabBar(group)}
 			</div>
@@ -1545,7 +1568,10 @@
 				on:pointerdown={() => focusGroup(tabGroups[tab.id].id)}
 			>
 				{#if tab.terminalId && !connection}
-					<div role="status" class="p-4 text-sm text-gray-500">
+					<div
+						role="status"
+						class="flex h-full items-center justify-center p-4 text-center text-xs text-gray-400 dark:text-gray-500"
+					>
 						{$i18n.t('Terminal connection unavailable')}
 					</div>
 				{:else if tab.kind === 'voice'}
@@ -1598,9 +1624,17 @@
 					/>
 				{:else if tab.kind === 'browser' || tab.kind === 'terminal'}
 					{#if owner.pending.has(tab.id)}
-						<p role="status" class="p-4 text-sm text-gray-500">{$i18n.t('Connecting…')}</p>
+						<p
+							role="status"
+							class="flex h-full items-center justify-center p-4 text-center text-xs text-gray-400 dark:text-gray-500"
+						>
+							{$i18n.t('Connecting…')}
+						</p>
 					{:else if !tab.sessionId || failure}
-						<div role="status" class="p-4 text-sm text-gray-500 space-y-3">
+						<div
+							role="status"
+							class="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-xs text-gray-400 dark:text-gray-500"
+						>
 							<p>
 								{failure?.status === 404
 									? $i18n.t('Session no longer available')
