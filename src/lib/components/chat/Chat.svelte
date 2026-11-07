@@ -248,7 +248,13 @@
 	let contextUsage = null;
 
 	const normalizeSelectedModels = (modelIds: string[] = []) => {
-		if (modelIds.some((id) => id.startsWith('agent:'))) return modelIds;
+		if (
+			modelIds.some(
+				(id) =>
+					id.startsWith('agent:') && decodeURIComponent(id.split(':')[1]) === $selectedTerminalId
+			)
+		)
+			return modelIds;
 		const selected = resolveDefaultModelIds(
 			$models,
 			modelIds,
@@ -511,6 +517,7 @@
 	let files: any[] = [];
 	let terminalContext: TerminalContext | null = null;
 	const askFile = async (instruction: string, file: FilesystemFile) => {
+		if (selectedModels.includes('')) throw new Error($i18n.t('Model not selected'));
 		const attachments = [structuredClone(file)];
 		if (fullWidthTabs) {
 			terminalTabs?.focusMainChat();
@@ -1086,6 +1093,15 @@
 		$terminalServers !== null &&
 		$selectedTerminalId &&
 		!isTerminalAvailable($selectedTerminalId)
+	) {
+		selectedTerminalId.set(null);
+	}
+
+	$: if (
+		$temporaryChatEnabled &&
+		($terminalServers ?? []).some(
+			(t) => t.id && t.id === $selectedTerminalId && t.contexts?.chat?.context_id === 'chat_id'
+		)
 	) {
 		selectedTerminalId.set(null);
 	}
@@ -3735,6 +3751,7 @@
 		inputFiles: any[],
 		bridgeRequest: { userMessageId: string; modelId: string } | null = null
 	) => {
+		if (selectedModels.includes('')) throw new Error($i18n.t('Model not selected'));
 		const _files = structuredClone(inputFiles);
 
 		chatFiles.push(
@@ -4805,6 +4822,10 @@
 	};
 
 	const submitMessage = async (parentId, prompt) => {
+		if (selectedModels.includes('')) {
+			toast.error($i18n.t('Model not selected'));
+			return;
+		}
 		let userPrompt = prompt;
 		let userMessageId = uuidv4();
 

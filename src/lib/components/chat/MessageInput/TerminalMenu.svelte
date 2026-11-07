@@ -11,6 +11,7 @@
 		showSettings,
 		terminalServers,
 		selectedTerminalId,
+		temporaryChatEnabled,
 		user
 	} from '$lib/stores';
 	import { getToolServersData } from '$lib/apis';
@@ -32,7 +33,10 @@
 		(t) =>
 			t.id &&
 			chatContext(t) !== false &&
-			!(isTemporaryChatId($activeChatId) && chatContext(t)?.context_id === 'chat_id')
+			!(
+				($temporaryChatEnabled || isTemporaryChatId($activeChatId)) &&
+				chatContext(t)?.context_id === 'chat_id'
+			)
 	);
 	$: directTerminals = (
 		$config?.features?.enable_direct_integrations &&
@@ -199,7 +203,7 @@
 				>
 					<!-- Direct terminals (gated by permission) -->
 					{#if directTerminals.length > 0}
-						<div class="flex items-center justify-between px-3 py-1">
+						<div class="flex items-center justify-between pl-2 pr-1 py-1">
 							<span
 								class="text-[0.625rem] font-normal text-gray-400 dark:text-gray-500 uppercase tracking-wider"
 							>
@@ -295,7 +299,7 @@
 
 					<!-- System terminals -->
 					{#if systemTerminals.length > 0}
-						<div class="flex items-center justify-between px-3 py-1">
+						<div class="flex items-center justify-between pl-2 pr-1 py-1">
 							<span
 								class="text-[0.625rem] font-normal text-gray-400 dark:text-gray-500 uppercase tracking-wider"
 							>

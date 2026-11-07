@@ -1,8 +1,10 @@
 <script lang="ts">
 	import type { TerminalContext } from '$lib/types';
 	import type { TerminalConnection } from '$lib/apis/terminal';
-	import type { GitStatus } from '$lib/apis/terminal/git';
+	import { gitRequest, type GitStatus, type GitFile } from '$lib/apis/terminal/git';
+	import { reverseGitDiff } from './Messages/diff';
 	import FileGitDiff from './FileNav/FileGitDiff.svelte';
+	import { gitTreePath, gitTreeStatus } from './FileNav/gitTreeStatus';
 	import { filesystemFile, type FilesystemFile } from '$lib/apis/terminal';
 	import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 	import ArrowRight from '$lib/components/icons/ArrowRight.svelte';
@@ -37,7 +39,6 @@
 		type TerminalFileRoot,
 		type TerminalCwd
 	} from '$lib/apis/terminal';
-	import { isCodeFile } from '$lib/utils/codeHighlight';
 	import { isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { copyToClipboard } from '$lib/utils';
 	import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
@@ -102,7 +103,7 @@
 			await filePreviewRef?.restoreView(
 				view.preview.dirty || view.preview.baseText === fileContent
 					? view.preview
-					: { ...view.preview, text: fileContent ?? '', editor: undefined, editing: false }
+					: { ...view.preview, text: fileContent ?? '', editor: undefined }
 			);
 		}
 		for (const path of view.expanded ?? []) {
@@ -142,6 +143,8 @@
 	// Keep typing from invalidating the keyed selection and remounting the input.
 	let fileAskInput = '';
 	let usingFileAsk = false;
+	let selectingWithPointer = false;
+	let pendingSelection: Event | undefined;
 	let asking = false;
 	const positionFileAsk = (node: HTMLFormElement, anchor: Range | HTMLElement) => {
 		document.body.appendChild(node);
@@ -242,11 +245,23 @@
 		};
 	};
 	const captureSelection = (event?: Event) => {
-		if (!active || usingFileAsk) return;
+		if (!active || usingFileAsk || dirtyChoice || asking) return;
 		const grid =
 			event instanceof CustomEvent && event.type === 'spreadsheetselection'
 				? (event.detail as { text: string; location: string; anchor: Range })
 				: null;
+		// Focused cells publish their own selection; the browser's text selection is unrelated.
+		if (
+			!grid &&
+			document.activeElement?.matches('[data-cell]') &&
+			viewerRoot?.contains(document.activeElement)
+		)
+			return;
+		if (selectingWithPointer) {
+			pendingSelection = event;
+			return;
+		}
+		fileAsk = null;
 		const selection = window.getSelection();
 		if (!onAskFile || !openedFile || (!grid && (!selection?.rangeCount || selection.isCollapsed)))
 			return;
@@ -625,6 +640,7 @@
 	let selectedFile: string | null = null;
 	let showGitDiff = false;
 	let gitFileKey = '';
+	$: treeGitStatuses = gitTreeStatus(gitStatus);
 	$: if (gitFileKey !== `${effectiveTerminalId}:${selectedFile}`) {
 		gitFileKey = `${effectiveTerminalId}:${selectedFile}`;
 		showGitDiff = false;
@@ -649,6 +665,73 @@
 	let filePreviewRef: FilePreview;
 	let commentPreviewRef: CommentFilePreview;
 	let commentGeneration = 0;
+	let gitBaseContent: string | null = null;
+	let gitBaseGeneration = 0;
+	let gitBaseKey = '';
+	const loadGitBase = async (
+		connection: TerminalConnection | null,
+		session: string | null,
+		status: GitStatus | null,
+		file: GitFile | null,
+		path: string | null,
+		content: string | null,
+		loading: boolean,
+		_version: number
+	) => {
+		const generation = ++gitBaseGeneration;
+		const key = JSON.stringify([connection, session, path]);
+		if (key !== gitBaseKey) gitBaseContent = null;
+		gitBaseKey = key;
+		const root = status?.is_repo && status.root ? normalizePath(status.root) : null;
+		if (
+			!connection ||
+			root === null ||
+			!path ||
+			content === null ||
+			loading ||
+			file?.binary ||
+			!normalizePath(path).startsWith(`${root.replace(/\/$/, '')}/`)
+		) {
+			gitBaseContent = null;
+			return;
+		}
+		try {
+			let base = content;
+			if (file?.status === 'untracked' || file?.status === 'added') base = '';
+			else if (file) {
+				const [unstaged, staged] = await Promise.all([
+					file.unstaged
+						? gitRequest<{ diff: string }>(connection, session, root, 'diff', {
+								file: file.path,
+								staged: 'false'
+							})
+						: null,
+					file.staged
+						? gitRequest<{ diff: string }>(connection, session, root, 'diff', {
+								file: file.path,
+								staged: 'true'
+							})
+						: null
+				]);
+				if (unstaged) base = reverseGitDiff(base, unstaged.diff);
+				if (staged) base = reverseGitDiff(base, staged.diff);
+			}
+			if (generation === gitBaseGeneration) gitBaseContent = base;
+		} catch {
+			// A stale patch or unavailable Git service must not interfere with editing.
+			if (generation === gitBaseGeneration) gitBaseContent = null;
+		}
+	};
+	$: void loadGitBase(
+		gitConnection,
+		chatId,
+		gitStatus,
+		currentGitFile,
+		selectedFile,
+		fileContent,
+		fileLoading,
+		commentGeneration
+	);
 	let fileSearchTarget: FileSearchTarget | null = null;
 	let documentTargetPage: number | null = null;
 
@@ -661,7 +744,6 @@
 	let excelWorkbook: import('xlsx').WorkBook | null = null;
 
 	// File preview toolbar state (bound from FilePreview)
-	let editing = false;
 	let showRaw = false;
 	let saving = false;
 
@@ -677,7 +759,6 @@
 	$: isJson = ['json', 'jsonc', 'jsonl', 'json5'].includes(getFileExt(selectedFile));
 	$: isSvg = getFileExt(selectedFile) === 'svg';
 	$: isNotebook = getFileExt(selectedFile) === 'ipynb';
-	$: isCode = isCodeFile(selectedFile);
 	$: isOfficeFile = OFFICE_EXTS.has(getFileExt(selectedFile));
 	$: isTextFile =
 		fileContent !== null && fileImageUrl === null && filePdfData === null && !isOfficeFile;
@@ -1223,7 +1304,12 @@
 			session = chatId;
 		const previousView =
 			openedFile?.path === filePath
-				? { showRaw, currentSlide, selectedExcelSheet, scroll: viewerRoot?.scrollTop ?? 0 }
+				? {
+						showRaw,
+						currentSlide,
+						selectedExcelSheet,
+						scroll: viewerRoot?.scrollTop ?? 0
+					}
 				: null;
 		const current = () =>
 			generation === loadGeneration && selector === effectiveTerminalId && session === chatId;
@@ -1501,6 +1587,8 @@
 		}
 	};
 
+	$: dragContext = JSON.stringify([selectedTerminal?.url, chatId ?? null]);
+
 	// Drag-and-drop upload
 	type UploadEntry = { path: string; file?: File };
 
@@ -1560,6 +1648,7 @@
 		if (rawMove) {
 			try {
 				const data = JSON.parse(rawMove);
+				if (data.context !== dragContext) return;
 				const paths = (data.paths || (data.path ? [data.path] : [])) as string[];
 				await handleMovePaths(paths, currentPath);
 			} catch {}
@@ -1754,11 +1843,20 @@
 	};
 
 	const handleMovePaths = async (sources: string[], destFolder: string) => {
+		const context = dragContext;
 		const movedSources: string[] = [];
-		for (const source of sources) {
+		const roots = [...new Set(sources.map((path) => normalizePath(path).replace(/\/$/, '')))];
+		for (const source of roots) {
+			if (context !== dragContext) break;
+			if (roots.some((parent) => parent !== source && source.startsWith(`${parent}/`))) continue;
+			if (
+				visibleEntries.find((entry) => entry.fullPath.replace(/\/$/, '') === source)?.writable ===
+				false
+			)
+				continue;
 			if (await moveOne(source, destFolder)) movedSources.push(source);
 		}
-		if (movedSources.length > 0) {
+		if (movedSources.length > 0 && context === dragContext) {
 			await refreshAfterMove(movedSources, destFolder);
 		}
 	};
@@ -1793,6 +1891,18 @@
 	let selectedEntries: Set<string> = new Set();
 	let lastClickedIndex: number | null = null;
 	let selectionMode = false;
+
+	const dragAttachments = (event: DragEvent, path: string) => {
+		if (!effectiveTerminalId) return;
+		const paths = selectedEntries.has(path) ? selectedEntries : new Set([path]);
+		const attachments = visibleEntries
+			.filter((entry) => entry.type === 'file' && paths.has(entry.fullPath))
+			.map((entry) =>
+				filesystemFile({ ...entry, path: entry.fullPath }, effectiveTerminalId!, chatId ?? null)
+			);
+		if (attachments.length)
+			event.dataTransfer?.setData('application/x-terminal-file', JSON.stringify(attachments));
+	};
 
 	$: selectedCount = selectedEntries.size;
 	$: comparisonEntries = [...selectedEntries]
@@ -2089,6 +2199,7 @@
 	});
 
 	onDestroy(() => {
+		++gitBaseGeneration;
 		overwriteChoice?.(false);
 		disposed = true;
 		++loadGeneration;
@@ -2150,13 +2261,29 @@
 		if (!active) return;
 		if (event.key === 'Escape' && fileAsk) {
 			fileAsk = null;
-			event.preventDefault();
 		} else handleKeydown(event);
 	}}
 	on:click={handleWindowClick}
 	on:pointerdown|capture={(event) => {
 		usingFileAsk = !!(event.target as Element)?.closest('[data-file-ask]');
+		selectingWithPointer =
+			event.button === 0 && !usingFileAsk && !!viewerRoot?.contains(event.target as Node);
+		pendingSelection = undefined;
 		if (fileAsk && !dirtyChoice && !usingFileAsk) fileAsk = null;
+	}}
+	on:pointerup={() => {
+		if (!selectingWithPointer) return;
+		selectingWithPointer = false;
+		captureSelection(pendingSelection);
+		pendingSelection = undefined;
+	}}
+	on:pointercancel={() => {
+		selectingWithPointer = false;
+		pendingSelection = undefined;
+	}}
+	on:blur={() => {
+		selectingWithPointer = false;
+		pendingSelection = undefined;
 	}}
 />
 
@@ -2231,6 +2358,7 @@
 		{/if}
 
 		<FileNavToolbar
+			{dragContext}
 			gitFile={currentGitFile}
 			gitDiffOpen={showGitDiff}
 			onToggleGitDiff={() => {
@@ -2272,13 +2400,27 @@
 			onSort={toggleSort}
 			onToggleHidden={toggleHidden}
 		>
-			{#if (isMarkdown || isCsv || isHtml || isJson || isSvg || isNotebook) && fileContent !== null && !editing}
+			{#if isMarkdown && fileContent !== null}
+				{#each [{ label: 'Editor', icon: 'pencil', raw: false }, { label: 'Source', icon: 'code', raw: true }] as mode}
+					<Tooltip content={$i18n.t(mode.label)}>
+						<button
+							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 aria-pressed:text-gray-900 dark:aria-pressed:text-white disabled:opacity-30"
+							aria-label={$i18n.t(mode.label)}
+							aria-pressed={showRaw === mode.raw}
+							on:click={() => {
+								showRaw = mode.raw;
+							}}
+						>
+							<Icon name={mode.icon} size={11} strokeWidth={1.4} />
+						</button>
+					</Tooltip>
+				{/each}
+			{:else if (isCsv || isHtml || isJson || isSvg || isNotebook) && fileContent !== null}
 				<Tooltip content={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}>
 					<button
 						class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
 						on:click={async () => {
 							if (!(await protectBuffer())) return;
-							if (editing) filePreviewRef?.cancelEdit();
 							showRaw = !showRaw;
 						}}
 						aria-label={showRaw ? $i18n.t('Preview') : $i18n.t('Source')}
@@ -2321,8 +2463,7 @@
 					<button
 						type="button"
 						class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
-						on:click={() =>
-							commentPreviewRef?.save().catch((error) => toast.error(String(error)))}
+						on:click={() => commentPreviewRef?.save().catch((error) => toast.error(String(error)))}
 						disabled={saving || !dirty || !selectedFileWritable}
 						aria-label={$i18n.t('Save')}
 					>
@@ -2354,25 +2495,7 @@
 					</Tooltip>
 				{:else if isHtml}
 					<!-- HTML preview mode: no edit/save buttons -->
-				{:else if isMarkdown && showRaw}
-					<Tooltip content={$i18n.t('Save')}>
-						<button
-							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
-							on:click={() =>
-								filePreviewRef?.saveCodeFile().catch((error) => toast.error(String(error)))}
-							disabled={saving || !selectedFileWritable}
-							aria-label={$i18n.t('Save')}
-						>
-							{#if saving}
-								<Spinner className="size-3.5" />
-							{:else}
-								<Icon name="check" size={11} strokeWidth={1.7} />
-							{/if}
-						</button>
-					</Tooltip>
 				{:else if isMarkdown}
-					<!-- Markdown preview mode: no edit/save buttons -->
-				{:else if isCode}
 					<Tooltip content={$i18n.t('Save')}>
 						<button
 							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
@@ -2388,21 +2511,12 @@
 							{/if}
 						</button>
 					</Tooltip>
-				{:else if editing}
-					<Tooltip content={$i18n.t('Cancel')}>
-						<button
-							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-							on:click={() => filePreviewRef?.cancelEdit()}
-							aria-label={$i18n.t('Cancel')}
-						>
-							<Icon name="xmark" size={11} strokeWidth={1.7} />
-						</button>
-					</Tooltip>
+				{:else if showRaw || (!isCsv && !isJson && !isSvg && !isNotebook) || dirty}
 					<Tooltip content={$i18n.t('Save')}>
 						<button
 							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
 							on:click={() =>
-								filePreviewRef?.saveEdit().catch((error) => toast.error(String(error)))}
+								filePreviewRef?.saveCodeFile().catch((error) => toast.error(String(error)))}
 							disabled={saving || !selectedFileWritable}
 							aria-label={$i18n.t('Save')}
 						>
@@ -2411,17 +2525,6 @@
 							{:else}
 								<Icon name="check" size={11} strokeWidth={1.7} />
 							{/if}
-						</button>
-					</Tooltip>
-				{:else}
-					<Tooltip content={$i18n.t('Edit')}>
-						<button
-							class="shrink-0 flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
-							on:click={() => filePreviewRef?.startEdit()}
-							disabled={!selectedFileWritable}
-							aria-label={$i18n.t('Edit')}
-						>
-							<Icon name="pencil" size={11} strokeWidth={1.4} />
 						</button>
 					</Tooltip>
 				{/if}
@@ -2572,8 +2675,8 @@
 						{/key}
 					{:else}
 						<FilePreview
+							{gitBaseContent}
 							bind:this={filePreviewRef}
-							bind:editing
 							bind:showRaw
 							bind:saving
 							bind:dirty
@@ -2826,7 +2929,9 @@
 							{/if}
 							{#each visibleEntries as entry (entry.fullPath)}
 								<FileEntryRow
+									{dragContext}
 									{entry}
+									gitFile={treeGitStatuses.get(gitTreePath(entry.fullPath)) ?? null}
 									{viewMode}
 									currentPath={entry.parentPath}
 									fullPath={entry.fullPath}
@@ -2841,6 +2946,7 @@
 									selected={selectedEntries.has(entry.fullPath)}
 									{selectionMode}
 									selectedPaths={selectedEntries}
+									onDragStart={dragAttachments}
 									onOpen={(row) =>
 										openEntry({
 											...row,
