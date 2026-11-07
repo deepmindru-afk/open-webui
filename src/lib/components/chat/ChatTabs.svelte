@@ -5,6 +5,7 @@
 	let fileGitDiffModes: Record<string, 'unified' | 'split'> = {};
 	let fileGitHideWhitespace: Record<string, boolean> = {};
 	import { onMount, onDestroy, tick, getContext } from 'svelte';
+	import { v4 as uuidv4 } from 'uuid';
 	import Sortable from 'sortablejs';
 	import { beforeNavigate, goto } from '$app/navigation';
 	import {
@@ -59,12 +60,16 @@
 		terminalRequest,
 		type TerminalConnection
 	} from '$lib/apis/terminal';
+	import { formatChord, keybindings, matchKeybinding, Shortcut } from '$lib/shortcuts';
+	import HotkeyHint from '../common/HotkeyHint.svelte';
 	import Dropdown from '../common/Dropdown.svelte';
 	import DropdownMenu from '../common/DropdownMenu.svelte';
 	import Icon from './FileNav/Icon.svelte';
 	import Annotation from '$lib/components/icons/Annotation.svelte';
 	import { fileIconName } from './FileNav/fileIcon';
 	import UntitledFile from './ChatTabs/UntitledFile.svelte';
+	import QuickOpen from './ChatTabs/QuickOpen.svelte';
+	import VoiceNote from './ChatTabs/VoiceNote.svelte';
 	import Browser from './ChatTabs/Browser.svelte';
 	import Desktop from './ChatTabs/Desktop.svelte';
 	import XTerminal from './XTerminal.svelte';
@@ -162,6 +167,31 @@
 	let closing = new Set<string>();
 	let navigationApproved = false;
 	let selectedConnection: TerminalConnection | null = null;
+	let showQuickOpen = false;
+	let voiceNote: VoiceNote;
+	let voiceNoteTarget: {
+		connection: TerminalConnection;
+		chatId: string | null;
+		directory?: string;
+	} | null = null;
+	$: canVoiceNote = terminalFilesAvailable && !!$user;
+	$: canTranscribeVoiceNote = $user?.role === 'admin' || ($user?.permissions?.chat?.stt ?? true);
+	const openVoiceNote = () => {
+		if (voiceNoteTarget) {
+			voiceNote?.finishRecording();
+			return;
+		}
+		if (!canVoiceNote || !selectedConnection || !$user) return;
+		voiceNoteTarget = {
+			connection: selectedConnection,
+			chatId,
+			directory:
+				contextTab?.terminalId === selectedConnection.selector
+					? terminalContext?.currentDirectory
+					: undefined
+		};
+	};
+	$: if (!terminalFilesAvailable) showQuickOpen = false;
 	let terminalEnabled = false;
 	let desktopEnabled = false;
 	let browserEnabled = false;
@@ -276,7 +306,7 @@
 		let number = 1;
 		while (tabs.tabs.some((tab) => tab.untitled && tab.label === `Untitled-${number}`)) number++;
 		openPanel({
-			id: crypto.randomUUID(),
+			id: uuidv4(),
 			kind: 'file',
 			label: `Untitled-${number}`,
 			terminalId: selectedConnection.selector,
@@ -296,7 +326,7 @@
 			const initialPrompt = pending?.parentId === chatId ? pending.prompt : '';
 			if (pending?.parentId === chatId) sideChatRequest.set(null);
 			openPanel({
-				id: crypto.randomUUID(),
+				id: uuidv4(),
 				kind,
 				label: `${view.label} ${sideChatNumber}`,
 				sideChatNumber,
@@ -418,7 +448,7 @@
 			let id = existing;
 			if (!id) {
 				focusGroup(groupId);
-				id = crypto.randomUUID();
+				id = uuidv4();
 				tabs = openTab(tabs, { id, kind: 'side', label: $i18n.t('Chat'), chatId: savedId });
 			}
 			tabs = bounds.edge
@@ -466,7 +496,7 @@
 			terminalNumber++;
 		}
 		openPanel({
-			id: crypto.randomUUID(),
+			id: uuidv4(),
 			kind: 'terminal',
 			label: `${$i18n.t('Terminal')} ${terminalNumber}`,
 			terminalNumber,
@@ -518,7 +548,7 @@
 				? `${connection.baseUrl}/chats/${encodeURIComponent(chatId)}`
 				: connection?.baseUrl);
 		openPanel({
-			id: crypto.randomUUID(),
+			id: uuidv4(),
 			kind: 'browser',
 			label: port ? `localhost:${port}` : $i18n.t('Browser'),
 			path: url,
@@ -715,6 +745,85 @@
 		tabs = setSplitTabs(tabs, true);
 	};
 
+	const toggleSplit = () => {
+		if (tabs.groups.length > 1) tabs = setSplitTabs(tabs, false);
+		else quickSplit();
+	};
+
+	const handleWorkspaceShortcut = (event: KeyboardEvent) => {
+		if (
+			event.defaultPrevented ||
+			event.repeat ||
+			$settings?.keyboardShortcuts === false ||
+			document.querySelector('.modal, [role="alertdialog"]') ||
+			(event.target instanceof Element &&
+				event.target.closest('[role="dialog"], [role="menu"], [role="listbox"]'))
+		)
+			return;
+
+		const shortcut = matchKeybinding(event);
+		let action: (() => void) | undefined;
+		switch (shortcut) {
+			case Shortcut.VOICE_NOTE:
+				if (voiceNoteTarget || canVoiceNote) action = openVoiceNote;
+				break;
+			case Shortcut.QUICK_OPEN:
+				if (terminalFilesAvailable && selectedConnection)
+					action = () => {
+						showQuickOpen = true;
+					};
+				break;
+			case Shortcut.OPEN_FILES:
+				if (showFilesTab) action = () => openFiles();
+				break;
+			case Shortcut.OPEN_DESKTOP:
+				if (desktopEnabled && selectedConnection) action = openDesktop;
+				break;
+			case Shortcut.NEW_CHAT_TAB:
+				if (canSideChat) action = () => openFeature('side');
+				break;
+			case Shortcut.OPEN_COMMENTS:
+				if (showCommentsTab) action = () => openFeature('comments');
+				break;
+			case Shortcut.NEW_FILE:
+				if (terminalFilesAvailable && selectedConnection) action = newFile;
+				break;
+			case Shortcut.NEW_TERMINAL:
+				if (terminalEnabled && selectedConnection) action = newTerminal;
+				break;
+			case Shortcut.NEW_BROWSER:
+				if (browserEnabled && selectedConnection) action = () => openBrowser();
+				break;
+			case Shortcut.CLOSE_TAB:
+				if (panelVisible && tabs.activeId)
+					action = () => {
+						void closeTab(tabs.activeId);
+					};
+				break;
+			case Shortcut.NEXT_TAB:
+			case Shortcut.PREVIOUS_TAB: {
+				const group = tabs.groups.find((group) => group.id === tabs.activeGroupId);
+				if (!panelVisible || !group || group.tabIds.length < 2) break;
+				const index = group.tabIds.indexOf(group.activeId);
+				const direction = shortcut === Shortcut.NEXT_TAB ? 1 : -1;
+				const id = group.tabIds[(index + direction + group.tabIds.length) % group.tabIds.length];
+				action = () => {
+					selectTab(id);
+					document.getElementById(domId(id))?.focus();
+				};
+				break;
+			}
+			case Shortcut.TOGGLE_SPLIT:
+				if (fullWidth && (tabs.tabs.length > 1 || canOpenNewTab)) action = toggleSplit;
+				break;
+		}
+		if (!action) return;
+		// Handle before editors and terminals consume the chord, but after modal recording.
+		event.preventDefault();
+		event.stopPropagation();
+		action();
+	};
+
 	$: directTerminals =
 		($settings as { terminalServers?: { url: string; key?: string }[] })?.terminalServers ?? [];
 	const terminalAccessible = (selector: string) => {
@@ -757,20 +866,20 @@
 		chatId;
 		pruneTabs();
 	}
+	$: selectedConnection =
+		terminalFilesAvailable && mounted
+			? resolveTerminalConnection(
+					$selectedTerminalId,
+					$terminalServers ?? [],
+					directTerminals,
+					localStorage.token ?? ''
+				)
+			: null;
 	const checkTerminal = async () => {
 		const version = ++featureVersion;
 		terminalEnabled = false;
 		desktopEnabled = false;
 		browserEnabled = false;
-		selectedConnection =
-			terminalFilesAvailable && mounted
-				? resolveTerminalConnection(
-						$selectedTerminalId,
-						$terminalServers ?? [],
-						directTerminals,
-						localStorage.token ?? ''
-					)
-				: null;
 		if (!selectedConnection) return;
 		try {
 			const result = await terminalRequest<{
@@ -786,11 +895,7 @@
 		}
 	};
 	$: {
-		terminalFilesAvailable;
-		$selectedTerminalId;
-		$terminalServers;
-		$settings;
-		mounted;
+		selectedConnection;
 		chatId;
 		void checkTerminal();
 	}
@@ -839,7 +944,6 @@
 		$sideChatRequest?.parentId === chatId
 	)
 		sideChatRequest.set(null);
-	$: if ($showTabs === 'files' && showFilesTab) openFiles();
 	$: if ($showTabs === 'side') {
 		if (canSideChat) openFeature('side');
 		else sideChatRequest.set(null);
@@ -916,6 +1020,7 @@
 	};
 
 	onMount(() => {
+		document.addEventListener('keydown', handleWorkspaceShortcut, true);
 		const unsubscribeVisibility = showTabs.subscribe((visible) => {
 			if (!largeScreen && !visible && panelTarget) releasePanel(panelTarget);
 		});
@@ -937,6 +1042,7 @@
 		init();
 
 		return () => {
+			document.removeEventListener('keydown', handleWorkspaceShortcut, true);
 			unsubscribeVisibility();
 			isDestroyed = true;
 			mounted = false;
@@ -994,6 +1100,32 @@
 	</div>
 {/if}
 
+{#if voiceNoteTarget}
+	{@const target = voiceNoteTarget}
+	<VoiceNote
+		bind:this={voiceNote}
+		{...target}
+		canTranscribe={canTranscribeVoiceNote}
+		onclose={() => {
+			voiceNoteTarget = null;
+		}}
+		onsaved={(path) => openFile(path, target.connection.selector)}
+	/>
+{/if}
+
+{#if showQuickOpen && terminalFilesAvailable && selectedConnection}
+	{#key `${selectedConnection.selector}:${chatId}`}
+		<QuickOpen
+			connection={selectedConnection}
+			{chatId}
+			onclose={() => {
+				showQuickOpen = false;
+			}}
+			onselect={(path) => openFile(path, selectedConnection!.selector)}
+		/>
+	{/key}
+{/if}
+
 <Modal
 	bind:show={$showOverview}
 	size="full"
@@ -1048,9 +1180,15 @@
 				type="button"
 				class="absolute right-2 top-1 z-20 flex size-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-50/40 dark:text-gray-400 dark:hover:bg-gray-800/40 disabled:opacity-30 pointer-events-auto"
 				aria-label={$i18n.t('Split screen')}
-				title={$i18n.t('Split screen')}
-				disabled={tabs.groups.length > 1 || (tabs.tabs.length < 2 && !canOpenNewTab)}
-				on:click={quickSplit}
+				title={[
+					$i18n.t('Split screen'),
+					$settings?.keyboardShortcuts !== false ? formatChord($keybindings.toggleSplit) : ''
+				]
+					.filter(Boolean)
+					.join(' · ')}
+				aria-pressed={tabs.groups.length > 1}
+				disabled={tabs.tabs.length < 2 && !canOpenNewTab}
+				on:click={toggleSplit}
 			>
 				<SplitPanel className="size-4.5" strokeWidth="1" />
 			</button>
@@ -1291,7 +1429,7 @@
 		positions.groups[group.id]?.top === 0 &&
 		positions.groups[group.id].left + positions.groups[group.id].width > 0.999
 			? 'pr-10'
-			: ''} gap-1 shrink-0 pointer-events-auto select-none col-start-1 row-start-1 min-w-0 z-10 bg-white dark:bg-gray-900"
+			: ''} gap-1 shrink-0 pointer-events-auto select-none col-start-1 row-start-1 min-w-0 z-10"
 	>
 		<div class="flex items-center gap-0.5 flex-1 min-w-0 py-0.5">
 			<div
@@ -1365,6 +1503,12 @@
 						{:else}<button
 								type="button"
 								class="flex items-center justify-center w-4 h-4 rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-white/10 dark:hover:text-white"
+								title={[
+									$i18n.t('Close'),
+									$settings?.keyboardShortcuts !== false ? formatChord($keybindings.closeTab) : ''
+								]
+									.filter(Boolean)
+									.join(' · ')}
 								aria-label={tab.kind === 'voice'
 									? $i18n.t('End call')
 									: `${$i18n.t('Close')} ${tab.label}`}
@@ -1382,24 +1526,41 @@
 						aria-label={$i18n.t('New tab')}><Icon name="plus" size={14} /></button
 					>
 					<div slot="content">
-						<DropdownMenu className="w-48">
+						<DropdownMenu className="min-w-56">
 							{#if showFilesMenuItem}
 								<button on:click={() => openFiles()}
-									><Icon name="folder" size={14} />{$i18n.t('Files')}</button
+									><Icon name="folder" size={14} /><span class="flex-1 text-start"
+										>{$i18n.t('Files')}</span
+									><HotkeyHint name="openFiles" className="ms-auto" /></button
 								>
 							{/if}
 							{#if terminalFilesAvailable}<button on:click={newFile}
-									><Icon name="page" size={14} />{$i18n.t('New File')}</button
+									><Icon name="page" size={14} /><span class="flex-1 text-start"
+										>{$i18n.t('New File')}</span
+									><HotkeyHint name="newFile" className="ms-auto" /></button
 								>{/if}
 							{#if terminalEnabled}<button on:click={newTerminal}
-									><Icon name="terminal" size={14} />{$i18n.t('New Terminal')}</button
+									><Icon name="terminal" size={14} /><span class="flex-1 text-start"
+										>{$i18n.t('New Terminal')}</span
+									><HotkeyHint name="newTerminal" className="ms-auto" /></button
 								>{/if}
 							{#if browserEnabled}<button on:click={() => openBrowser()}
-									><Icon name="browser" size={14} />{$i18n.t('Browser')}</button
+									><Icon name="browser" size={14} /><span class="flex-1 text-start"
+										>{$i18n.t('Browser')}</span
+									><HotkeyHint name="newBrowser" className="ms-auto" /></button
 								>{/if}
 							{#if desktopEnabled}<button on:click={openDesktop}
-									><Icon name="monitor" size={14} />{$i18n.t('Desktop')}</button
+									><Icon name="monitor" size={14} /><span class="flex-1 text-start"
+										>{$i18n.t('Desktop')}</span
+									><HotkeyHint name="openDesktop" className="ms-auto" /></button
 								>{/if}
+							{#if canVoiceNote}
+								<button on:click={openVoiceNote}>
+									<Icon name="microphone" size={14} />
+									<span class="flex-1 text-start">{$i18n.t('Voice Note')}</span>
+									<HotkeyHint name="voiceNote" className="ms-auto" />
+								</button>
+							{/if}
 							{#each newTabViews as view}
 								<button
 									on:click={() =>
@@ -1411,7 +1572,12 @@
 										<Annotation className="size-3.5 shrink-0" />
 									{:else}
 										<Icon name={tabIcon(view.kind as PanelTab['kind'])} size={14} />
-									{/if}{view.label}
+									{/if}<span class="flex-1 text-start">{view.label}</span>
+									{#if view.kind === 'side'}
+										<HotkeyHint name="newChatTab" className="ms-auto" />
+									{:else if view.kind === 'comments'}
+										<HotkeyHint name="openComments" className="ms-auto" />
+									{/if}
 								</button>
 							{/each}
 						</DropdownMenu>

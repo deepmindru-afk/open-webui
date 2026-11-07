@@ -1094,9 +1094,13 @@
 			);
 			if (generation === agentDiscovery) {
 				models.set(available);
-				selectedModels = selectedModels.map((id) =>
-					id.startsWith('agent:') && !available.some((model) => model.id === id) ? '' : id
+				const remaining = selectedModels.filter(
+					(id) => !id.startsWith('agent:') || available.some((model) => model.id === id)
 				);
+				selectedModels =
+					remaining.length || equal(remaining, selectedModels)
+						? remaining
+						: normalizeSelectedModels(remaining);
 			}
 		} catch (error) {
 			console.error('Agent model discovery failed', error);
@@ -3030,6 +3034,8 @@
 					if (isTerminalAvailable(terminalId)) {
 						selectedTerminalId.set(terminalId);
 						await refreshAgentModels();
+					} else if ($terminalServers !== null) {
+						selectedModels = selectedModels.filter((modelId) => !modelId.startsWith('agent:'));
 					}
 				}
 
@@ -5548,7 +5554,6 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
-										{fullWidthTabs}
 										{terminalContext}
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5650,7 +5655,6 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
-										{fullWidthTabs}
 										{terminalContext}
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5721,7 +5725,6 @@
 						{:else}
 							<div class="flex items-center h-full">
 								<Placeholder
-									{fullWidthTabs}
 									chatId={$chatId}
 									{terminalContext}
 									callActive={!!(bridge?.connected || bridge?.connecting)}
