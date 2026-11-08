@@ -2647,13 +2647,7 @@
 
 										<svelte:fragment slot="terminal">
 											{#if showTerminalSelector && terminalControlsInMenu}
-												<TerminalMenu
-													inMenu
-													directoryLocked={!!history?.currentId}
-													chatId={isSavedChatId(chatId) ? chatId : null}
-													bind:terminalContext
-													disabled={generating || !!history?.currentId || isSavedChatId(chatId)}
-												/>
+												<TerminalMenu inMenu {chatId} bind:terminalContext disabled={generating} />
 												<div class="h-px mx-1 my-1 bg-gray-100 dark:bg-gray-800"></div>
 											{/if}
 										</svelte:fragment>
@@ -2918,10 +2912,9 @@
 											<div data-terminal-controls class="flex items-center gap-1.5 shrink-0">
 												<TerminalMenu
 													bind:show={showTerminalMenu}
-													directoryLocked={!!history?.currentId}
-													chatId={isSavedChatId(chatId) ? chatId : null}
+													{chatId}
 													bind:terminalContext
-													disabled={generating || !!history?.currentId || isSavedChatId(chatId)}
+													disabled={generating}
 												/>
 											</div>
 										{/if}
