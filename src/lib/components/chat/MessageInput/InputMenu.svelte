@@ -56,6 +56,19 @@
 	$: hasInternalList = ['tools', 'skills', 'files', 'notes', 'knowledge', 'chats'].includes(tab);
 
 	let showAttachWebpageModal = false;
+	$: showAddContext =
+		$visibleControls['chat.attach_webpage'] ||
+		$visibleControls['chat.attach_files'] ||
+		(($config?.features?.enable_notes ?? false) &&
+			($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true)) &&
+			$visibleControls['chat.attach_notes']) ||
+		$visibleControls['chat.attach_knowledge'] ||
+		$visibleControls['chat.reference_chats'] ||
+		(fileUploadEnabled &&
+			($config?.features?.enable_google_drive_integration ||
+				($config?.features?.enable_onedrive_integration &&
+					($config?.features?.enable_onedrive_personal ||
+						$config?.features?.enable_onedrive_business))));
 	$: toolApprovalModes = [
 		{
 			value: 'full',
@@ -203,6 +216,8 @@
 						<div class="h-px mx-1 my-1 bg-gray-100 dark:bg-gray-800"></div>
 					{/if}
 
+					<slot name="terminal" />
+
 					<Tooltip
 						content={fileUploadCapableModels.length !== selectedModels.length
 							? $i18n.t('Model(s) do not support file upload')
@@ -266,20 +281,22 @@
 						</Tooltip>
 					{/if}
 
-					<button
-						role="menuitem"
-						type="button"
-						class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
-						on:click={() => {
-							tab = 'attachments';
-						}}
-					>
-						<DocumentDuplicate />
-						<div class="flex items-center w-full justify-between">
-							<div>{$i18n.t('Add Context')}</div>
-							<div class="text-gray-500"><ChevronRight /></div>
-						</div>
-					</button>
+					{#if showAddContext}
+						<button
+							role="menuitem"
+							type="button"
+							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
+							on:click={() => {
+								tab = 'attachments';
+							}}
+						>
+							<DocumentDuplicate />
+							<div class="flex items-center w-full justify-between">
+								<div>{$i18n.t('Add Context')}</div>
+								<div class="text-gray-500"><ChevronRight /></div>
+							</div>
+						</button>
+					{/if}
 				</div>
 			{:else if tab === 'attachments'}
 				<div in:fly={{ x: 20, duration: 150 }}>

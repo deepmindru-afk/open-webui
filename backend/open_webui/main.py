@@ -463,7 +463,7 @@ async def lifespan(app: FastAPI):
                         'path': '/internal',
                         'query_string': b'',
                         'headers': Headers({}).raw,
-                        'client': ('127.0.0.1', 12345),
+                        'client': ('', 12345),
                         'server': ('127.0.0.1', 80),
                         'scheme': 'http',
                         'app': app,
@@ -1862,7 +1862,14 @@ async def chat_completion(
 
             if is_saved_chat_id(chat_id):
                 await Chats.upsert_message_to_chat_by_id_and_message_id(
-                    chat_id, assistant_message_id, {'meta': {'task_id': per_model_metadata['task_id']}}, touch=False
+                    chat_id,
+                    assistant_message_id,
+                    {
+                        'meta': {'task_id': per_model_metadata['task_id']},
+                        # Agent models disappear with their terminal.
+                        **({'modelName': agent_model['name']} if agent_model else {}),
+                    },
+                    touch=False,
                 )
 
             # Per-model form_data: own model
