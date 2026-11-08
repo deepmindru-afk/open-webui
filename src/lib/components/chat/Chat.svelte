@@ -107,7 +107,7 @@
 		updateChatParams,
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
-	import type { FilesystemFile } from '$lib/apis/terminal';
+	import { resolveTerminalConnection, setCwd, type FilesystemFile } from '$lib/apis/terminal';
 	import { generateOpenAIChatCompletion, getErrorMessage } from '$lib/apis/openai';
 	import { processUrl, processWebSearch } from '$lib/apis/retrieval';
 	import {
@@ -534,7 +534,9 @@
 					{ id: uuidv4(), prompt: instruction, files: attachments }
 				]
 			}));
-		} else await submitPrompt(instruction, attachments);
+		} else if ((await getChatId(history, attachments)) !== null) {
+			await submitPrompt(instruction, attachments);
+		}
 	};
 
 	let params = {};
@@ -3963,8 +3965,37 @@
 	let tabActions: import('svelte').Snippet | undefined;
 	let tabBarActions: import('svelte').Snippet | undefined;
 
-	const getChatId = async (_history: typeof history) => {
+	let initializedTerminalChatId: string | null = null;
+	const initializeTerminalDirectory = async (id: string, context: TerminalContext | null) => {
+		if (initializedTerminalChatId === id) return;
+		if (!$config?.features?.enable_tool_servers || !context?.currentDirectory) return;
+		const userSettings: any = $settings;
+		const connection = resolveTerminalConnection(
+			context.terminalId,
+			$terminalServers ?? [],
+			$config?.features?.enable_direct_integrations ? (userSettings?.terminalServers ?? []) : [],
+			localStorage.token
+		);
+		if (!connection) throw new Error($i18n.t('Terminal Not Found'));
+		const result = await setCwd(connection.baseUrl, connection.key, context.currentDirectory, id);
+		if (!result?.cwd)
+			throw new Error(
+				$i18n.t('Working directory is unavailable. Check the terminal connection and path.')
+			);
+		initializedTerminalChatId = id;
+	};
+
+	const getChatId = async (_history: typeof history, inputFiles = files) => {
 		let _chatId = $chatId;
+		const terminalId =
+			inputFiles.find((file) => file.type === 'filesystem')?.terminal_id ?? $selectedTerminalId;
+		const context =
+			$config?.features?.enable_tool_servers &&
+			!Object.keys(_history.messages).length &&
+			terminalContext &&
+			terminalContext.terminalId === terminalId
+				? terminalContext
+				: null;
 		// Empty embedded drafts create their backing chat only when the first message is sent.
 		if (!_chatId) {
 			if (embedded && onCreateEmbeddedChat) {
@@ -3989,13 +4020,17 @@
 				_chatId = createTemporaryChatId($socket?.id);
 				await chatId.set(_chatId);
 			}
-			if (!_chatId && terminalTabs?.hasTerminals()) {
+			if (!_chatId && (context?.currentDirectory || terminalTabs?.hasTerminals())) {
 				_chatId = await initChatHandler(_history);
 			}
 			await tick();
 		}
 		if (history !== _history) return null;
 		if (_chatId) await terminalTabs?.bindTerminalChat(_chatId);
+		if (history !== _history || $chatId !== _chatId) return null;
+		// Also covers temporary/embedded chats and retries after a failed initialization.
+		if (_chatId) await initializeTerminalDirectory(_chatId, context);
+		if (history !== _history || $chatId !== _chatId) return null;
 		return _chatId;
 	};
 
@@ -4975,6 +5010,7 @@
 	const initChatHandler = async (_history: typeof history) => {
 		let _chatId = $chatId;
 		const selectedFolderId = $selectedFolder?.id;
+		const context = terminalContext;
 
 		if (!$temporaryChatEnabled) {
 			const createdChat = await createNewChat(
@@ -5020,6 +5056,7 @@
 			_chatId = isTemporaryChatId(_chatId) ? _chatId : createTemporaryChatId($socket?.id);
 			await chatId.set(_chatId);
 		}
+		await initializeTerminalDirectory(_chatId, context);
 		await tick();
 
 		return _chatId;
