@@ -1134,7 +1134,11 @@ async def chat_completion(
         if len(parts) != 4:
             raise HTTPException(400, 'Invalid agent model')
         candidates = await get_agent_models(
-            request, user, form_data.get('terminal_id'), form_data.get('chat_id'), provider=parts[2],
+            request,
+            user,
+            form_data.get('terminal_id'),
+            form_data.get('chat_id'),
+            provider=parts[2],
             cwd=requested_directory,
         )
         agent_model = next((item for item in candidates if item['id'] == model_id), None)
@@ -2347,8 +2351,14 @@ async def get_app_config(request: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail='Invalid token',
             )
-        if data is not None and 'id' in data and await is_valid_token(data, request.app.state.redis):
-            user = await Users.get_user_by_id(data['id'])
+        if data is not None and 'id' in data:
+            try:
+                if await is_valid_token(data, request.app.state.redis):
+                    user = await Users.get_user_by_id(data['id'])
+            except HTTPException as e:
+                # A deleted or deactivated account gets the public config
+                if e.status_code != status.HTTP_401_UNAUTHORIZED:
+                    raise
 
     group_defaults = None
     if user is not None and user.role in ('admin', 'user'):
