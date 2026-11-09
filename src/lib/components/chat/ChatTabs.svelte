@@ -375,8 +375,8 @@
 			connection: selectedConnection,
 			chatId,
 			directory:
-				contextTab?.terminalId === selectedConnection.selector
-					? terminalContext?.currentDirectory
+				activeFileContext?.terminalId === selectedConnection.selector
+					? activeFileContext.currentDirectory
 					: undefined
 		};
 	};
@@ -438,13 +438,7 @@
 		activeTab?.kind === 'chat'
 			? tabs.tabs.find((tab) => tab.id === tabs.history.at(-1))
 			: activeTab;
-	const syncTerminalContext = (context: TerminalContext | null) => {
-		if (context) terminalContext = context;
-		else if (terminalContext?.file) terminalContext = { ...terminalContext, file: null };
-	};
-	$: syncTerminalContext(
-		(contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null
-	);
+	$: activeFileContext = (contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null;
 	$: if (activeTabId && panelTarget) {
 		const id = activeTabId;
 		void tick().then(() =>
@@ -502,10 +496,6 @@
 	};
 	const openFiles = (selector = $selectedTerminalId, directory?: string, newTab = false) => {
 		if (selector ? !terminalAccessible(selector) : !showFilesTab) return;
-		directory ??=
-			terminalContext?.terminalId === selector
-				? terminalContext.currentDirectory || undefined
-				: undefined;
 		const existing = newTab
 			? undefined
 			: (tabs.tabs.find(
@@ -515,6 +505,8 @@
 						(tab.terminalId ?? null) === selector
 				) ??
 				tabs.tabs.find((tab) => tab.kind === 'files' && (tab.terminalId ?? null) === selector));
+		if (!existing && terminalContext?.terminalId === selector)
+			directory ??= terminalContext.currentDirectory || undefined;
 		const id = existing?.id ?? uuidv4();
 		openPanel({
 			id,
@@ -560,7 +552,10 @@
 			terminalId: selectedConnection.selector,
 			connection: { ...selectedConnection },
 			untitled: true,
-			context: contextTab?.terminalId === selectedConnection.selector ? terminalContext : undefined
+			context:
+				activeFileContext?.terminalId === selectedConnection.selector
+					? activeFileContext
+					: undefined
 		});
 	};
 	const openFeature = (
