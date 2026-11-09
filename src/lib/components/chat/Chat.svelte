@@ -1152,11 +1152,9 @@
 			const defaultFeature = (feature: 'web_search' | 'image_generation' | 'code_interpreter') =>
 				featureAvailable(feature) &&
 				currentModels.every((model) => model.info?.meta?.defaultFeatureIds?.includes(feature));
-			const folderTerminalId = !history.currentId ? $selectedFolder?.data?.terminal_id : null;
+			// Folder defaults are applied at chat initialization; keep subsequent terminal choices.
 			const terminalId =
-				!history.currentId && $selectedFolder
-					? folderTerminalId
-					: currentModels[0]?.info?.meta?.terminalId;
+				!history.currentId && $selectedFolder ? null : currentModels[0]?.info?.meta?.terminalId;
 			const defaults: Record<string, any> = {
 				selectedToolIds: [
 					...new Set(
@@ -1187,8 +1185,7 @@
 				terminalId:
 					terminalId &&
 					isTerminalAvailable(terminalId) &&
-					(folderTerminalId ||
-						currentModels.every((model) => model.info?.meta?.terminalId === terminalId))
+					currentModels.every((model) => model.info?.meta?.terminalId === terminalId)
 						? terminalId
 						: $selectedTerminalId
 			};
