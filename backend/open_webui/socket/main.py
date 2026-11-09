@@ -304,8 +304,13 @@ async def publish_note_presence(note_id: str):
         if REDIS is not None and not await lock.owned():
             return
         await sio.emit(
-            'note:presence',
-            {'note_id': note_id, 'users': sorted(people.values(), key=lambda person: person['id'])},
+            'events',
+            {
+                'data': {
+                    'type': 'note:presence',
+                    'data': {'note_id': note_id, 'users': sorted(people.values(), key=lambda person: person['id'])},
+                }
+            },
             room=f'note:{note_id}',
         )
 
@@ -592,7 +597,7 @@ async def disconnect_sessions_for_users(user_ids: list[str], *, refresh_access: 
     for sid in session_ids:
         if refresh_access:
             try:
-                await sio.emit('access:updated', {}, to=sid)
+                await sio.emit('events', {'data': {'type': 'access:updated'}}, to=sid)
             except Exception:
                 log.exception('Failed to notify session %s about changed access', sid)
         try:
@@ -1159,11 +1164,16 @@ async def document_save_handler(document_id, data, user):
         )
         if saved:
             await sio.emit(
-                'events:note',
+                'events',
                 {
-                    'id': note_id,
-                    'page': get_page(saved.data, page['id']),
-                    'updated_at': saved.updated_at,
+                    'data': {
+                        'type': 'note:updated',
+                        'data': {
+                            'id': note_id,
+                            'page': get_page(saved.data, page['id']),
+                            'updated_at': saved.updated_at,
+                        },
+                    }
                 },
                 to=f'note:{note_id}',
             )
