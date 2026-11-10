@@ -46,6 +46,7 @@
 	} from '$lib/utils';
 
 	export let initialPrompt = '';
+	export let standalone = false;
 	export let initialView: any = null;
 	export const captureView = () => ({ draft, files, context });
 	export let chatId = '';
@@ -60,11 +61,11 @@
 	const originalChatId = parentChatId;
 	$: sideChatAllowed =
 		$user?.role === 'admin' ||
-		($user?.role === 'user' && ($user.permissions?.chat?.side_chat ?? false));
+		($user?.role === 'user' && (standalone || ($user.permissions?.chat?.side_chat ?? false)));
 	// Snapshot the active branch once; later parent edits and streaming stay in the parent.
-	const context = (() => {
+	let context = (() => {
 		if (initialView?.context) return initialView.context;
-		if (chatId) return [];
+		if (chatId || standalone) return [];
 		const branch: any[] = [];
 		let current = history?.currentId;
 		const seen = new Set<string>();
@@ -97,7 +98,6 @@
 			)
 		);
 	})();
-	const contextIds = new Set(context.map((message) => message.id));
 	let loaded = !chatId;
 	let isShared = false;
 	let readOnly = false;
@@ -334,13 +334,16 @@
 				const saved = await getChatById(localStorage.token, id);
 				if (disposed || !sideChatAllowed) return;
 				isShared = saved.user_id !== $user?.id;
-				readOnly = isShared && saved.chat.share_mode !== 'continue';
+				readOnly = isShared && !saved.write_access;
 				if (!loaded) {
 					selectedModels = [saved.chat.models?.[0] ?? modelId];
 					params = { ...saved.chat.params };
 					system = params.system ?? saved.chat.system ?? $settings.system ?? '';
 				}
 				const savedHistory = saved.chat.history ?? convertMessagesToHistory(saved.chat.messages);
+				if (parentChatId && !context.length)
+					context = createMessagesList(savedHistory, saved.chat.branchPointMessageId);
+				const contextIds = new Set(context.map((message) => message.id));
 				messages = createMessagesList(
 					savedHistory,
 					saved.current_message_id ?? savedHistory.currentId
@@ -633,7 +636,7 @@
 				atSelectedModel={undefined}
 				readOnly
 				forkHandler={null}
-				shareMode={null}
+				writeAccess={false}
 				sendMessage={() => {}}
 				continueResponse={() => {}}
 				regenerateResponse={() => {}}

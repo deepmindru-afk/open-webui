@@ -4,6 +4,7 @@ import type { TerminalConnection } from '$lib/apis/terminal';
 
 export type PanelTabKind =
 	| 'chat'
+	| 'page'
 	| 'files'
 	| 'file'
 	| 'terminal'
@@ -18,9 +19,11 @@ export type PanelTab = {
 	id: string;
 	kind: PanelTabKind;
 	label: string;
+	href?: string;
 	initialPrompt?: string;
 	chatId?: string;
 	sideChatNumber?: number;
+	sideChat?: boolean;
 	terminalId?: string;
 	terminalNumber?: number;
 	path?: string;
@@ -308,3 +311,17 @@ export function panelPositions(layout: PanelLayout) {
 
 export const fileTabId = (terminalId: string, path: string) =>
 	JSON.stringify(['file', terminalId, path]);
+
+// Queries selecting an editor resource identify a tab; view queries stay within it.
+export function pageTabKey(url: URL): string | null {
+	if (url.pathname.startsWith('/workspace/functions')) return null;
+	if (
+		!/^\/(?:$|c\/|channels\/|notes(?:\/|$)|automations(?:\/|$)|calendar(?:\/|$)|workspace(?:\/|$)|playground(?:\/|$)|home(?:\/|$))/.test(
+			url.pathname
+		)
+	)
+		return null;
+	const path = url.pathname.replace(/\/$/, '') || '/';
+	const id = path.endsWith('/edit') ? url.searchParams.get('id') : null;
+	return path + (path === '/' ? url.search : id ? `?id=${encodeURIComponent(id)}` : '');
+}

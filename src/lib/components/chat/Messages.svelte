@@ -21,6 +21,7 @@
 	export let className = 'h-full flex pt-18';
 
 	export let chatId = '';
+	export let temporary = $temporaryChatEnabled;
 	export let user = $_user;
 
 	export let prompt;
@@ -45,7 +46,7 @@
 	export let forkHandler: Function | null = null;
 
 	export let readOnly = false;
-	export let shareMode: 'continue' | null = null;
+	export let writeAccess = false;
 	export let allowDelete = true;
 	export let allowToolApproval: boolean = false;
 	export let compactPreview = false;
@@ -193,7 +194,7 @@
 	};
 
 	const updateChat = async () => {
-		if (!$temporaryChatEnabled) {
+		if (!temporary) {
 			history = history;
 			await tick();
 			const res = await updateChatById(localStorage.token, chatId, {
@@ -487,7 +488,7 @@
 		history.currentId = getDeepestChildId(history, parentMessageId);
 		history = history;
 
-		if (!$temporaryChatEnabled) {
+		if (!temporary) {
 			const res = await deleteChatMessageById(localStorage.token, chatId, messageId);
 			if (res?.chat?.history) {
 				history = res.chat.history;
@@ -568,7 +569,7 @@
 									{editCodeBlock}
 									{topPadding}
 									{onInsertToNote}
-									{shareMode}
+									{writeAccess}
 								/>
 							{/each}
 						</ul>

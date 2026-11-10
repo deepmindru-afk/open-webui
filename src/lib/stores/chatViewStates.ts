@@ -10,7 +10,7 @@ import {
 	removeTab,
 	type ChatViewState,
 	type PanelTab
-} from '$lib/components/chat/ChatTabs/tabs';
+} from '$lib/components/chat/Tabs/tabs';
 
 export type EditorDraft = {
 	baseText: string;
@@ -66,10 +66,12 @@ export function serializeChatView(state: ChatViewState): ChatViewState {
 				id: tab.id,
 				kind: tab.kind,
 				label: tab.label,
+				href: tab.href,
 				terminalId: tab.terminalId,
 				terminalNumber: tab.terminalNumber,
 				chatId: tab.chatId,
 				sideChatNumber: tab.sideChatNumber,
+				sideChat: tab.sideChat,
 				path: tab.path,
 				page: tab.page,
 				sessionId: tab.sessionId,
@@ -112,7 +114,14 @@ export async function loadChatView(entry: Entry) {
 			const result = await getChatView(entry.chatId!);
 			if (result.state && result.state.schemaVersion !== 1)
 				throw new Error('Unsupported chat view version');
-			if (!entry.loaded && result.state) entry.state = result.state;
+			if (!entry.loaded && result.state) {
+				entry.state = result.state;
+				// Older views used the display number to identify chats branched from the parent.
+				for (const tab of entry.state.panels.tabs) {
+					if (tab.kind === 'side')
+						tab.sideChat ??= !tab.href && !!tab.sideChatNumber;
+				}
+			}
 			entry.loaded = true;
 			entry.error = '';
 		} catch (error) {

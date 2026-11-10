@@ -15,12 +15,14 @@ class ViewModel(BaseModel):
 
 class PanelTab(ViewModel):
     id: str
-    kind: Literal['chat', 'comments', 'files', 'file', 'terminal', 'browser', 'desktop', 'side']
+    kind: Literal['chat', 'comments', 'files', 'file', 'terminal', 'browser', 'desktop', 'side', 'page']
     label: str
+    href: str | None = None
     terminalId: str | None = None
     terminalNumber: int | None = None
     chatId: str | None = None
     sideChatNumber: int | None = None
+    sideChat: bool | None = None
     path: str | None = None
     page: int | None = None
     sessionId: str | None = None

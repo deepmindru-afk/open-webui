@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { getTerminalServers } from '$lib/apis/terminal';
 	import { resolveToolApprovalMode } from '$lib/utils/toolPermissions';
-	import type { TerminalContext } from '$lib/types';
+	import type { AppLayoutContext, TerminalContext } from '$lib/types';
 	import {
 		estimateTokens,
 		estimateMessagesTokens,
@@ -13,6 +14,7 @@
 	import { getContext, setContext, onDestroy, onMount, tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	const i18n: Writable<i18nType> = getContext('i18n');
+	const appLayout = getContext<AppLayoutContext | undefined>('appLayout');
 
 	import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -24,7 +26,7 @@
 	import equal from 'fast-deep-equal';
 
 	import {
-		chatId,
+		chatId as _chatId,
 		config,
 		type Model,
 		models,
@@ -35,23 +37,23 @@
 		banners,
 		user,
 		socket,
-		audioQueue,
-		showTabs,
+		audioQueue as _audioQueue,
+		showTabs as _showTabs,
 		sideChatRequest,
-		showCallOverlay,
-		temporaryChatEnabled,
+		showCallOverlay as _showCallOverlay,
+		temporaryChatEnabled as _temporaryChatEnabled,
 		mobile,
-		chatTitle,
-		showArtifacts,
-		artifactContents,
+		chatTitle as _chatTitle,
+		showArtifacts as _showArtifacts,
+		artifactContents as _artifactContents,
 		tools,
 		skills,
 		terminalSkills,
 		toolServers,
 		terminalServers,
 		functions,
-		selectedFolder,
-		showEmbeds,
+		selectedFolder as _selectedFolder,
+		showEmbeds as _showEmbeds,
 		selectedTerminalId,
 		showFileNavPath,
 		showFileNavDir,
@@ -137,7 +139,7 @@
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
-	import ChatTabs from './ChatTabs.svelte';
+	import Tabs from './Tabs.svelte';
 	import EventConfirmDialog from '../common/ConfirmDialog.svelte';
 	import ElicitationDialog from './ElicitationDialog.svelte';
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
@@ -156,7 +158,20 @@
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 
 	export let chatIdProp = '';
+	export let initialPage = '';
+	let mainChatHref = '/';
+	$: if ($chatId) mainChatHref = `/c/${$chatId}`;
 	export let embedded = false;
+	const chatId = embedded ? writable('') : _chatId;
+	const chatTitle = embedded ? writable('') : _chatTitle;
+	const audioQueue = embedded ? writable<AudioQueue | null>(null) : _audioQueue;
+	const temporaryChatEnabled = embedded ? writable(false) : _temporaryChatEnabled;
+	const selectedFolder = embedded ? writable(null) : _selectedFolder;
+	const showTabs = embedded ? writable(get(_showTabs)) : _showTabs;
+	const showCallOverlay = embedded ? writable(false) : _showCallOverlay;
+	const showArtifacts = embedded ? writable(false) : _showArtifacts;
+	const showEmbeds = embedded ? writable(false) : _showEmbeds;
+	const artifactContents = embedded ? writable(null) : _artifactContents;
 	export let embeddedTitle = '';
 	export let embeddedChats = [];
 	export let embeddedDraftKey = '';
@@ -175,8 +190,12 @@
 		null;
 
 	let loading = true;
-	$: chatContainerId = embedded ? 'note-chat-container' : 'chat-container';
-	$: messageInputDropzoneId = embedded ? 'note-chat-input-dropzone' : 'chat-pane';
+	const instanceId = uuidv4();
+	const messagesContainerId = embedded ? `note-messages-${instanceId}` : 'messages-container';
+	const inputId = embedded ? `note-chat-input-${instanceId}` : 'chat-input';
+	let audioElement: HTMLAudioElement;
+	$: chatContainerId = embedded ? `note-chat-container-${instanceId}` : 'chat-container';
+	$: messageInputDropzoneId = embedded ? `note-chat-input-dropzone-${instanceId}` : 'chat-pane';
 
 	const eventTarget = new EventTarget();
 
@@ -1091,7 +1110,10 @@
 			if (generation === agentDiscovery) {
 				models.set(available);
 				const remaining = selectedModels.filter(
-					(id) => !id.startsWith('agent:') || available.some((model) => model.id === id)
+					(id) =>
+						!id.startsWith('agent:') ||
+						(chat?.chat?.models?.includes(id) && decodeURIComponent(id.split(':')[1]) === $selectedTerminalId) ||
+						available.some((model: Model) => model.id === id)
 				);
 				selectedModels =
 					remaining.length || equal(remaining, selectedModels)
@@ -1372,7 +1394,7 @@
 
 	const emitTyping = (typing: boolean) => {
 		if (!$socket?.connected || !joinedChatId) return;
-		if (typing && (joinedChatId !== $chatId || (isShared && chat?.chat?.share_mode !== 'continue')))
+		if (typing && (joinedChatId !== $chatId || (isShared && !chat?.write_access)))
 			return;
 		if (typing ? Date.now() - lastTypingEmit < 2000 : !lastTypingEmit) return;
 		lastTypingEmit = typing ? Date.now() : 0;
@@ -1583,7 +1605,7 @@
 				if (
 					!sender?.id ||
 					sender.id === $user?.id ||
-					(isShared && chat?.chat?.share_mode !== 'continue')
+					(isShared && !chat?.write_access)
 				)
 					return;
 				if (event.data.data?.typing) {
@@ -1892,7 +1914,7 @@
 		if (type === 'input:prompt') {
 			console.debug(event.data.text);
 
-			const inputElement = document.getElementById('chat-input');
+			const inputElement = document.getElementById(inputId);
 
 			if (inputElement) {
 				messageInput?.setTextHandler(event.data.text);
@@ -1981,6 +2003,7 @@
 	onMount(() => {
 		loading = true;
 		console.log('mounted');
+		if (!embedded && appLayout) appLayout.initNewChat = initNewChat;
 		window.addEventListener('message', onMessageHandler);
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
@@ -1991,7 +2014,7 @@
 		$audioQueue?.destroy();
 
 		const audioQueueInstance = new AudioQueue(
-			document.getElementById('audioElement'),
+			audioElement,
 			() => $settings.responseAutoPlayback ?? false
 		);
 		audioQueue.set(audioQueueInstance);
@@ -2007,8 +2030,14 @@
 			});
 		}
 
-		if ($page.url.pathname === '/' || $page.url.pathname.startsWith('/folders/')) {
-			tick().then(initNewChat);
+		if (
+			!embedded &&
+			(initialPage || $page.url.pathname === '/' || $page.url.pathname.startsWith('/folders/'))
+		) {
+			tick().then(async () => {
+				await initNewChat();
+				if (initialPage) terminalTabs?.openPageTab({ href: initialPage, label: '' });
+			});
 		}
 
 		// the artifacts pane reads this list when it opens, which can be before the debounced rebuild
@@ -2070,6 +2099,7 @@
 				if (chatIdProp && !$temporaryChatEnabled) {
 					updateLastReadAt(chatIdProp);
 				}
+				if (appLayout?.initNewChat === initNewChat) delete appLayout.initNewChat;
 				showArtifactsSubscribe();
 				selectedFolderSubscribe();
 
@@ -2553,6 +2583,7 @@
 	afterNavigate(async ({ from, to }) => {
 		// A navigation that mounts this page starts its new chat in onMount.
 		if (
+			!embedded &&
 			from?.route.id === to?.route.id &&
 			(to?.url.pathname === '/' || to?.url.pathname.startsWith('/folders/'))
 		) {
@@ -2699,8 +2730,18 @@
 		showTabs.set(true);
 	};
 
-	const initNewChat = async () => {
-		terminalTabs?.prepareChatSwitch();
+	const initNewChat = async (preserveTabs = false, keepDraft = false) => {
+		const searchParams = initialPage || preserveTabs ? new URLSearchParams() : $page.url.searchParams;
+		mainChatHref = '/';
+		if (!initialPage && !preserveTabs && $page.url.pathname === '/') {
+			mainChatHref += $page.url.search + $page.url.hash;
+		}
+		if ($selectedFolder?.id) mainChatHref = `/folders/${$selectedFolder.id}`;
+		if (keepDraft && !$chatId && !history.currentId) {
+			terminalTabs?.focusMainChat();
+			return;
+		}
+		terminalTabs?.prepareChatSwitch(preserveTabs);
 		loading = true;
 		if (
 			!embedded &&
@@ -2737,7 +2778,7 @@
 			}
 		}
 
-		if ($page.url.searchParams.get('temporary-chat') === 'true') {
+		if (searchParams.get('temporary-chat') === 'true') {
 			await temporaryChatEnabled.set(true);
 		}
 
@@ -2768,10 +2809,10 @@
 			}
 		};
 
-		if ($page.url.searchParams.get('models') || $page.url.searchParams.get('model')) {
+		if (searchParams.get('models') || searchParams.get('model')) {
 			const urlModels = (
-				$page.url.searchParams.get('models') ||
-				$page.url.searchParams.get('model') ||
+				searchParams.get('models') ||
+				searchParams.get('model') ||
 				''
 			)?.split(',');
 
@@ -2849,7 +2890,7 @@
 		await showCallOverlay.set(false);
 		await showArtifacts.set(false);
 
-		if (!embedded && $page.url.pathname.includes('/c/')) {
+		if (!embedded && !preserveTabs && $page.url.pathname.includes('/c/')) {
 			window.history.replaceState(window.history.state, '', `/`);
 		}
 
@@ -2869,6 +2910,13 @@
 			return;
 		}
 		await chatId.set('');
+		if (preserveTabs) {
+			chatIdProp = '';
+			loadedChatIdProp = '';
+			chat = null;
+			tags = [];
+			serverContextUsage = null;
+		}
 		await chatTitle.set('');
 
 		history = {
@@ -2885,37 +2933,37 @@
 		taskIds = null;
 		chatTasks = [];
 
-		const youtube = $page.url.searchParams.get('youtube');
-		const loadUrl = $page.url.searchParams.get('load-url');
+		const youtube = searchParams.get('youtube');
+		const loadUrl = searchParams.get('load-url');
 		const urls = [
 			...(youtube ? [`https://www.youtube.com/watch?v=${youtube}`] : []),
 			...(loadUrl ? [loadUrl] : [])
 		];
 		const call =
-			$page.url.searchParams.get('call') === 'true' ||
-			$page.url.searchParams.get('voice') === 'true';
+			searchParams.get('call') === 'true' ||
+			searchParams.get('voice') === 'true';
 		pendingUrlActions = urls.length || call ? { urls, call } : null;
 
-		if ($page.url.searchParams.get('web-search') === 'true') {
+		if (searchParams.get('web-search') === 'true') {
 			webSearchEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('image-generation') === 'true') {
+		if (searchParams.get('image-generation') === 'true') {
 			imageGenerationEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('code-interpreter') === 'true') {
+		if (searchParams.get('code-interpreter') === 'true') {
 			codeInterpreterEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('tools')) {
-			selectedToolIds = $page.url.searchParams
+		if (searchParams.get('tools')) {
+			selectedToolIds = searchParams
 				.get('tools')
 				?.split(',')
 				.map((id) => id.trim())
 				.filter((id) => id && ($tools ?? []).find((t) => t.id === id));
-		} else if ($page.url.searchParams.get('tool-ids')) {
-			selectedToolIds = $page.url.searchParams
+		} else if (searchParams.get('tool-ids')) {
+			selectedToolIds = searchParams
 				.get('tool-ids')
 				?.split(',')
 				.map((id) => id.trim())
@@ -2971,8 +3019,8 @@
 					}
 				}
 			}
-		} else if ($page.url.searchParams.get('q')) {
-			const q = $page.url.searchParams.get('q') ?? '';
+		} else if (searchParams.get('q')) {
+			const q = searchParams.get('q') ?? '';
 
 			messageInput?.setTextHandler(q);
 		}
@@ -2982,6 +3030,7 @@
 		);
 
 		await tick();
+		if (preserveTabs) terminalTabs?.focusMainChat();
 		messageInput?.focus({ preventScroll: true });
 	};
 
@@ -3047,14 +3096,19 @@
 					(chatContent?.models ?? undefined) !== undefined
 						? chatContent.models
 						: [chatContent.models ?? ''];
+				if ($terminalServers === null) {
+					const servers = await getTerminalServers(localStorage.token);
+					if (signal.aborted) return;
+					terminalServers.set(servers);
+				}
+				const terminalId = chatContent.terminal_id;
+				selectedTerminalId.set(terminalId && isTerminalAvailable(terminalId) ? terminalId : null);
+				terminalContext = $selectedTerminalId && typeof chatContent.working_directory === 'string'
+					? { terminalId: $selectedTerminalId, currentDirectory: chatContent.working_directory }
+					: null;
 				if (selectedModels[0]?.startsWith('agent:')) {
-					const terminalId = decodeURIComponent(selectedModels[0].split(':')[1]);
-					if (isTerminalAvailable(terminalId)) {
-						selectedTerminalId.set(terminalId);
-						await refreshAgentModels();
-					} else if ($terminalServers !== null) {
-						selectedModels = selectedModels.filter((modelId) => !modelId.startsWith('agent:'));
-					}
+					if ($selectedTerminalId) await refreshAgentModels();
+					else selectedModels = selectedModels.filter((modelId) => !modelId.startsWith('agent:'));
 				}
 
 				// An empty model list is not evidence that the chat's models are gone.
@@ -3959,7 +4013,7 @@
 		prompt = '';
 	};
 
-	let terminalTabs: ChatTabs;
+	let terminalTabs: Tabs;
 	let fullWidthTabs = false;
 	let mainChatActive = false;
 	let mainChatStyle = '';
@@ -4769,7 +4823,7 @@
 					if (!$temporaryChatEnabled && !embedded) {
 						// Carry the picks made on the new-chat page over to this chat
 						saveDraft(getChatInputDraft(), res.chat_id, false);
-						window.history.replaceState(window.history.state, '', `/c/${res.chat_id}`);
+						if (!initialPage) window.history.replaceState(window.history.state, '', `/c/${res.chat_id}`);
 						await refreshChatList(localStorage.token);
 
 						// Save chat params omitted from the completion request; the backend already saves files.
@@ -5022,6 +5076,9 @@
 					id: _chatId,
 					title: $i18n.t('New Chat'),
 					models: selectedModels,
+					terminal_id: $selectedTerminalId,
+					working_directory:
+						context?.terminalId === $selectedTerminalId ? context.currentDirectory : '',
 					system: $settings.system ?? undefined,
 					params: params,
 					history: _history,
@@ -5041,7 +5098,7 @@
 
 			if (!embedded) {
 				saveDraft(getChatInputDraft(), _chatId, false);
-				window.history.replaceState(window.history.state, '', `/c/${_chatId}`);
+				if (!initialPage) window.history.replaceState(window.history.state, '', `/c/${_chatId}`);
 			}
 
 			await tick();
@@ -5087,15 +5144,16 @@
 	};
 
 	const saveControls = async (models: string[] | null = null) => {
-		if (isShared) return;
+		if (isShared && !chat?.write_access) return;
 		if (!$chatId || $temporaryChatEnabled || chat?.id !== $chatId) return;
 		// Model choices are passed explicitly; automatic fallbacks must not be saved.
 		if (!models?.length || !models.every(Boolean)) models = null;
+		if (isShared && !models) return;
 		if (!models && equal(chatFiles, chat.chat?.files ?? [])) return;
 		const id = $chatId;
 
 		const res = await updateChatById(localStorage.token, id, {
-			files: chatFiles,
+			...(!isShared ? { files: chatFiles } : {}),
 			...(models ? { models } : {})
 		}).catch((err) => {
 			console.error('[controls autosave]', err);
@@ -5239,18 +5297,7 @@
 	};
 </script>
 
-<svelte:head>
-	<!-- LICENSE covers this Open WebUI browser-title identifier.
-	Do not alter, remove, obscure, or replace it except as LICENSE permits:
-	https://docs.openwebui.com/license. -->
-	<title>
-		{$settings.showChatTitleInTab !== false && $chatTitle
-			? `${$chatTitle.length > 30 ? `${$chatTitle.slice(0, 30)}...` : $chatTitle} / ${$WEBUI_NAME}`
-			: `${$WEBUI_NAME}`}
-	</title>
-</svelte:head>
-
-<audio id="audioElement" style="display: none;"></audio>
+<audio bind:this={audioElement} style="display: none;"></audio>
 
 {#if getChatVariablesForm(selectedModelIds, chatVariables, $models).conflicts.length > 0}
 	<Modal ariaLabel={$i18n.t('Chat Variables')} bind:show={showChatVariablesModal} size="md">
@@ -5524,6 +5571,11 @@
 											id: uuidv4(),
 											title: title.length > 50 ? `${title.slice(0, 50)}...` : title,
 											models: selectedModels,
+											terminal_id: $selectedTerminalId,
+											working_directory:
+												terminalContext?.terminalId === $selectedTerminalId
+													? terminalContext.currentDirectory
+													: '',
 											params: params,
 											history: history,
 											messages: messages,
@@ -5553,7 +5605,7 @@
 						{#if ($settings?.landingPageMode === 'chat' && !$selectedFolder) || createMessagesList(history, history.currentId).length > 0}
 							<div
 								class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
-								id="messages-container"
+								id={messagesContainerId}
 								bind:this={messagesContainerElement}
 								on:scroll={(e) => {
 									if (!messagesContainerElement) return;
@@ -5568,11 +5620,13 @@
 							>
 								<div class=" h-full w-full flex flex-col">
 									<Messages
+										{messagesContainerId}
+										temporary={$temporaryChatEnabled}
 										bind:this={messagesRef}
 										chatId={$chatId}
 										user={chatOwner ?? (chat ? { id: chat.user_id } : $user)}
 										readOnly={isShared}
-										shareMode={chat?.chat?.share_mode ?? null}
+										writeAccess={!!chat?.write_access}
 										bind:history
 										bind:autoScroll
 										bind:prompt
@@ -5601,7 +5655,7 @@
 								</div>
 							</div>
 
-							{#if isShared && chat?.chat?.share_mode !== 'continue'}
+							{#if isShared && !chat?.write_access}
 								{#if canClone}
 									<div
 										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center gap-2 bg-linear-to-t from-white dark:from-gray-900 to-transparent pb-5 pt-10"
@@ -5621,6 +5675,9 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
+										{messagesContainerId}
+										{inputId}
+										temporary={$temporaryChatEnabled}
 										bind:terminalContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5722,6 +5779,9 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
+										{messagesContainerId}
+										{inputId}
+										temporary={$temporaryChatEnabled}
 										bind:terminalContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
@@ -5854,7 +5914,8 @@
 			</div>
 
 			{#if !embedded}
-				<ChatTabs
+				<Tabs
+					{mainChatHref}
 					chatLoading={loading}
 					bind:fullWidth={fullWidthTabs}
 					bind:mainChatActive
