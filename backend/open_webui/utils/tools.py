@@ -79,6 +79,7 @@ from open_webui.tools.builtin import (
     read_memory_path,
     replace_memory_content,
     replace_note_content,
+    render_visualization,
     search_calendar_events,
     search_channel_messages,
     search_channels,
@@ -87,6 +88,7 @@ from open_webui.tools.builtin import (
     search_knowledge_files,
     search_memories,
     search_notes,
+    search_users,
     search_web,
     timer,
     toggle_automation,
@@ -719,6 +721,9 @@ async def get_builtin_tools(
             'type': 'builtin',
         }
 
+    if is_builtin_tool_enabled('visualizations', False):
+        builtin_functions.append(render_visualization)
+
     # Time utilities - available for date calculations
     if is_builtin_tool_enabled('time'):
         builtin_functions.extend([get_current_timestamp, calculate_timestamp])
@@ -788,9 +793,9 @@ async def get_builtin_tools(
                 ]
             )
 
-    # Chats tools - search and fetch user's chat history
+    # Chats tools - search chat history and the user directory
     if is_builtin_tool_enabled('chats'):
-        builtin_functions.extend([search_chats, view_chat])
+        builtin_functions.extend([search_chats, view_chat, search_users])
 
     if (
         is_builtin_tool_enabled('subagents')

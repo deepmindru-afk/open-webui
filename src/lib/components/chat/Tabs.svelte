@@ -89,6 +89,13 @@
 	import DropdownMenu from '../common/DropdownMenu.svelte';
 	import Icon from './FileNav/Icon.svelte';
 	import Annotation from '$lib/components/icons/Annotation.svelte';
+	import HomeIcon from '$lib/components/icons/Home.svelte';
+	import HashtagIcon from '$lib/components/icons/Hashtag.svelte';
+	import NotesIcon from '$lib/components/layout/Sidebar/icons/Notes.svelte';
+	import WorkspaceIcon from '$lib/components/layout/Sidebar/icons/Workspace.svelte';
+	import ClockIcon from '$lib/components/layout/Sidebar/icons/Clock.svelte';
+	import CalendarIcon from '$lib/components/layout/Sidebar/icons/Calendar.svelte';
+	import CodeIcon from '$lib/components/layout/Sidebar/icons/Code.svelte';
 	import { fileIconName } from './FileNav/fileIcon';
 	import UntitledFile from './Tabs/UntitledFile.svelte';
 	import QuickOpen from './Tabs/QuickOpen.svelte';
@@ -120,6 +127,7 @@
 
 	export let chatId: string | null = null;
 	export let chatLoading = false;
+	export let chatStreaming = false;
 	export let folderId: string | null = null;
 	export let terminalContext: TerminalContext | null = null;
 	export let chatUser = null;
@@ -174,6 +182,7 @@
 	let browserViews: Record<string, Browser> = {};
 	let gitViews: Record<string, GitBar> = {};
 	let sideViews: Record<string, SideChat> = {};
+	let sideChatStreaming: Record<string, boolean> = {};
 	let viewEntry: ReturnType<typeof chatViewEntry> | null = null;
 	let viewReady = false;
 	let viewError = '';
@@ -214,6 +223,7 @@
 		if (preserveChatView) return;
 		viewReady = false;
 		tabs = emptyTabs();
+		sideChatStreaming = {};
 		++switchVersion;
 		tabsChatId = undefined;
 	}
@@ -260,6 +270,7 @@
 		viewReady = false;
 		tabs = emptyTabs();
 		viewError = '';
+		sideChatStreaming = {};
 		tabsChatId = id;
 		const owner = chatViewEntry($user.id, id, $temporaryChatEnabled);
 		viewEntry = owner;
@@ -319,6 +330,7 @@
 		viewReady = false;
 		viewEntry = null;
 		tabs = emptyTabs();
+		sideChatStreaming = {};
 		tabsChatId = undefined;
 		clearChatViews();
 	}
@@ -430,6 +442,15 @@
 		};
 		update(target);
 		return { update, destroy: () => node.remove() };
+	};
+	const pageIcons: Record<string, typeof NotesIcon> = {
+		notes: NotesIcon,
+		workspace: WorkspaceIcon,
+		automations: ClockIcon,
+		calendar: CalendarIcon,
+		playground: CodeIcon,
+		home: HomeIcon,
+		channels: HashtagIcon
 	};
 	const tabIcon = (kind: PanelTab['kind']) =>
 		({
@@ -994,6 +1015,7 @@
 				tabs = owner.state.panels;
 				delete dirtyFiles[id];
 				delete fileContexts[id];
+				delete sideChatStreaming[id];
 				if (!tabs.tabs.length || (!largeScreen && tabs.tabs.every((tab) => tab.kind === 'chat')))
 					showTabs.set(false);
 				await tick();
@@ -1849,6 +1871,7 @@
 					<SideChat
 						standalone={!!tab.href}
 						bind:this={sideViews[tab.id]}
+						bind:streaming={sideChatStreaming[tab.id]}
 						initialView={owner.transient[`side:${tab.id}`]}
 						chatId={tab.chatId ?? ''}
 						onChatUpdate={(chat) =>
@@ -2101,6 +2124,8 @@
 				}}
 			>
 				{#each group.tabIds.map((id) => tabs.tabs.find((tab) => tab.id === id)!) as tab (tab.id)}
+					{@const PageIcon =
+						tab.kind === 'page' ? pageIcons[tab.href?.split(/[/?#]/)[1] ?? ''] : null}
 					<div
 						role="presentation"
 						data-panel-tab={tab.id}
@@ -2124,10 +2149,15 @@
 							aria-label={tab.kind === 'chat' ? title : undefined}
 							class="flex h-full items-center gap-1.5 min-w-0"
 						>
-							{#if tab.kind === 'file'}
+							{#if (tab.kind === 'chat' && chatStreaming) || (tab.kind === 'side' && sideChatStreaming[tab.id])}
+								<Spinner className="size-3.5" />
+								<span class="sr-only">{$i18n.t('Generating...')}</span>
+							{:else if tab.kind === 'file'}
 								<Icon name={fileIconName(tab.label)} size={14} strokeWidth={1.4} />
 							{:else if tab.kind === 'comments'}
 								<Annotation className="size-3.5 shrink-0" />
+							{:else if PageIcon}
+								<svelte:component this={PageIcon} className="size-3.5 shrink-0" />
 							{:else}
 								<Icon name={tabIcon(tab.kind)} size={14} />
 							{/if}

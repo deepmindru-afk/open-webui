@@ -45,7 +45,7 @@ from open_webui.env import (
     GLOBAL_LOG_LEVEL,
     RAG_SYSTEM_CONTEXT,
 )
-from open_webui.events import EVENTS, publish_event
+from open_webui.events import EVENTS, build_event, publish_event
 from open_webui.models.access_grants import AccessGrants
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
@@ -166,7 +166,7 @@ from open_webui.utils.tool_calling import (
     final_answer_payload,
     prepare_tool_call,
     recover_tool_calls,
-    set_tool_call_visibility,
+    set_tool_call_metadata,
     split_tool_calls,
     tool_repetition_error,
 )
@@ -245,7 +245,8 @@ async def publish_chat_finished_event(
 
     content = content or get_output_text(output)
     webui_url = await Config.get('webui.url')
-    await publish_event(
+    model = (getattr(request.app.state, 'MODELS', {}) or {}).get(metadata.get('model_id'), {})
+    event = build_event(
         request,
         EVENTS.CHAT_FINISHED,
         actor=user,
@@ -256,12 +257,25 @@ async def publish_chat_finished_event(
             'chat_id': chat_id,
             'message_id': metadata.get('message_id'),
             'model_id': metadata.get('model_id'),
+            'model_name': model.get('name'),
             'title': title,
             'url': f'{webui_url}/c/{chat_id}' if webui_url else f'/c/{chat_id}',
             'message': content,
         },
         message=title or 'Chat finished',
     )
+    try:
+        from open_webui.internal.db import get_async_db_context
+        from open_webui.models.notifications import emit_changes
+        from open_webui.utils.inbox import consume_event
+
+        async with get_async_db_context() as db:
+            recipients = await consume_event(event, db=db)
+            await db.commit()
+        await emit_changes(recipients)
+    except Exception:
+        log.exception('Chat mention notification failed for %s', chat_id)
+    await publish_event(request, event)
     event_emitter = await get_event_emitter(metadata, update_db=False)
     if event_emitter:
         folder_id = metadata.get('folder_id') or await Chats.get_chat_folder_id(chat_id, metadata.get('user_id'))
@@ -4690,7 +4704,7 @@ async def streaming_chat_response_handler(response, ctx):
 
             def full_output():
                 for item in output:
-                    set_tool_call_visibility(item, metadata.get('tools', {}))
+                    set_tool_call_metadata(item, metadata.get('tools', {}))
                 if is_message_continuation():
                     return [
                         *prior_output[:-1],
@@ -4910,7 +4924,7 @@ async def streaming_chat_response_handler(response, ctx):
                             response_data.get('item') or {},
                             *((response_data.get('response') or {}).get('output') or []),
                         ]:
-                            set_tool_call_visibility(item, metadata.get('tools', {}))
+                            set_tool_call_metadata(item, metadata.get('tools', {}))
                         if response_data.get('type', '').endswith('.delta'):
                             await queue_pending_delta_data(
                                 response_data,
@@ -5244,6 +5258,7 @@ async def streaming_chat_response_handler(response, ctx):
                                                 if item.get('type') == 'function_call'
                                             }
 
+                                            tool_name_changed = False
                                             for tc in response_tool_calls:
                                                 call_id = tc.get('id') or output_id('fc')
                                                 tc['id'] = call_id
@@ -5252,6 +5267,7 @@ async def streaming_chat_response_handler(response, ctx):
                                                     output_index, item = output_by_call_id[call_id]
                                                     if func.get('name', item.get('name', '')) != item.get('name'):
                                                         stream_size = 0
+                                                        tool_name_changed = True
                                                     item['name'] = func.get('name', item.get('name', ''))
                                                     item['arguments'] = func.get('arguments', item.get('arguments', ''))
                                                     item['status'] = 'in_progress'
@@ -5302,6 +5318,17 @@ async def streaming_chat_response_handler(response, ctx):
                                                             'delta': delta_arguments,
                                                         }
                                                     )
+
+                                            if tool_name_changed:
+                                                # A late tool name can select a native renderer. Flush deltas
+                                                # before the full snapshot so arguments are not appended twice.
+                                                await flush_pending_delta_data()
+                                                await event_emitter(
+                                                    {
+                                                        'type': 'chat:completion',
+                                                        'data': {'output': full_output(), 'flush': True},
+                                                    }
+                                                )
 
                                             data = None
                                             delta_type = 'tool_call'
