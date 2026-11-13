@@ -54,6 +54,7 @@
 	import FolderMenu from './Folders/FolderMenu.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import FolderModal from './Folders/FolderModal.svelte';
+	import FolderShareModal from './Folders/FolderShareModal.svelte';
 	import Emoji from '$lib/components/common/Emoji.svelte';
 
 	export let folderRegistry = {};
@@ -77,6 +78,7 @@
 
 	let openPreview = false;
 	let showFolderModal = false;
+	let showShareModal = false;
 	let edit = false;
 
 	let showCreateSubFolderModal = false;
@@ -656,6 +658,8 @@
 	</div>
 </DeleteConfirmDialog>
 
+<FolderShareModal bind:show={showShareModal} folder={folders[folderId]} />
+
 <FolderModal bind:show={showFolderModal} edit={true} {folderId} onSubmit={updateHandler} />
 
 <FolderModal
@@ -829,7 +833,7 @@
 								{#if !folders[folderId]?.shared && (folders[folderId]?.unread_count ?? 0) > 0}
 									<div
 										class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-sky-500/10 px-1 text-[0.625rem] font-semibold leading-4 text-sky-600 dark:bg-sky-400/10 dark:text-sky-300"
-										title={$i18n.t('Unread')}
+										title={$i18n.t('Unread or waiting for approval')}
 									>
 										{formatUnreadCount(folders[folderId].unread_count)}
 									</div>
@@ -871,6 +875,9 @@
 								showCreateSubFolderModal = true;
 							}}
 							onMarkAllRead={markAllReadHandler}
+							onShare={($user?.role === 'admin' || (folders[folderId]?.user_id === $user?.id && $user?.permissions?.sharing?.folders))
+								? () => (showShareModal = true)
+								: null}
 						>
 							<div
 								class="flex size-5 items-center justify-center self-center dark:hover:text-white transition m-0 touch-auto"
