@@ -42,13 +42,12 @@
 		desktopEvent
 	} from '$lib/stores';
 	import { refreshChatList, setChatTitle } from '$lib/stores/chatList';
-	import { clearFolderStates, beginFolderOpening } from '$lib/stores/folderStates';
+	import { clearFolderStates } from '$lib/stores/folderStates';
 	import { getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
 	import { updated } from '$app/state';
-	beforeNavigate(() => beginFolderOpening());
 
 	import i18n, { initI18n, getLanguages, changeLanguage } from '$lib/i18n';
 
@@ -542,11 +541,10 @@
 			}
 		}
 
-		if (
-			!event?.internal &&
-			((event.chat_id !== $chatId && !$openEmbeddedChatIds.has(event.chat_id) && !$temporaryChat) ||
-				isInBackground)
-		) {
+		const isVisible = !!document
+			.querySelector(`[data-chat-id="${CSS.escape(event.chat_id)}"]`)
+			?.checkVisibility();
+		if (!event?.internal && ((!isVisible && !$temporaryChat) || isInBackground)) {
 			if (type === 'chat:completion') {
 				const { done, content, output, title } = data;
 				const displayTitle = title || $i18n.t('New Chat');
@@ -717,7 +715,7 @@
 								body: content,
 								icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
 							},
-							`/channels/${event.channel_id}`
+							`/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
 						);
 					}
 				}

@@ -532,10 +532,7 @@
 		voiceNoteDestination = {
 			target: selectedConnection,
 			chatId,
-			directory:
-				activeFileContext?.terminalId === selectedConnection.selector
-					? activeFileContext.currentDirectory
-					: undefined
+			directory: getCurrentDirectory(selectedConnection.selector)
 		};
 	};
 	$: if (!supportsTerminalFiles) showQuickOpen = false;
@@ -607,6 +604,9 @@
 			? tabs.tabs.find((tab) => tab.id === tabs.history.at(-1))
 			: activeTab;
 	$: activeFileContext = (contextTab && fileContexts[contextTab.id]) ?? contextTab?.context ?? null;
+	/** The folder the active file panel shows on `terminalId`, if it shows one there. */
+	export const getCurrentDirectory = (terminalId: string | null) =>
+		activeFileContext?.terminalId === terminalId ? activeFileContext.currentDirectory : undefined;
 	$: if (activeTabId && panelTarget) {
 		const id = activeTabId;
 		void tick().then(() =>
@@ -1667,7 +1667,14 @@
 	}
 
 	beforeNavigate(({ from, to, cancel, willUnload }) => {
-		if (from?.url.pathname === to?.url.pathname) return;
+		if (from?.url.pathname === to?.url.pathname) {
+			// The router stays on the main chat while other tabs are in front; going there uncovers it.
+			if (to && location.pathname !== to.url.pathname) {
+				focusMainChat();
+				if (!isLargeScreen) showTabs.set(false);
+			}
+			return;
+		}
 		captureView();
 		if (viewEntry) void flushChatView(viewEntry);
 		if (willUnload && hasChatViewDrafts()) cancel();
@@ -1761,7 +1768,7 @@
 						: null;
 		if (href) {
 			const url = new URL(href, location.origin);
-			if (active?.id === mainChatTabId && !chatId) {
+			if (active?.id === mainChatTabId && !isSavedChatId(chatId)) {
 				// delete() re-encodes the other parameters even when it removes nothing.
 				if ($temporaryChat !== ($settings?.temporaryChatByDefault ?? false))
 					url.searchParams.set('temporary-chat', String($temporaryChat));
@@ -1983,14 +1990,14 @@
 				}}
 			>
 				<div
-					class="absolute bg-gray-50 dark:bg-gray-850/30 group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors {divider.direction ===
+					class="absolute bg-gray-200/40 dark:bg-gray-850/20 group-hover:bg-gray-300/60 dark:group-hover:bg-gray-800 transition-colors {divider.direction ===
 					'horizontal'
 						? 'inset-y-0 left-1/2 w-px'
 						: 'inset-x-0 top-1/2 h-px'}"
 				></div>
 			</div>
 		{/each}
-		{#each (viewReady ? tabs.tabs : []).filter((tab) => tab.id !== mainChatTabId) as tab (`${viewEntry?.instanceId}:${tab.id}`)}
+		{#each (viewReady ? tabs.tabs : []).filter((tab) => tab.id !== mainChatTabId) as tab (tab.kind === 'page' ? tab.id : `${viewEntry?.instanceId}:${tab.id}`)}
 			{@const chatView = viewEntry!}
 			{@const target =
 				isMounted && $config && $user && $settings && $terminalServers !== null

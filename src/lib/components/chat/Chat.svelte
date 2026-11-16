@@ -17,7 +17,7 @@
 	const i18n: Writable<i18nType> = getContext('i18n');
 	const appLayout = getContext<AppLayoutContext | undefined>('appLayout');
 
-	import { goto, beforeNavigate, afterNavigate, onNavigate } from '$app/navigation';
+	import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
 
 	import { get, writable, type Unsubscriber, type Writable } from 'svelte/store';
@@ -95,7 +95,7 @@
 	import { RealtimeCall, getBridgeTurnState, type BridgeSubmission } from '$lib/utils/realtime';
 	import { acquireWakeLock } from '$lib/utils/wakeLock';
 	import { routeAvatarAnimation } from '$lib/utils/voice-avatar';
-	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
+	import { createTemporaryChatId, isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { canUseTemporaryChats } from '$lib/utils/settings-access';
 	import { resumeTemporaryChat } from '$lib/apis';
 	import {
@@ -111,6 +111,7 @@
 		compactChatById,
 		createNewChat,
 		deleteChatById,
+		deleteChatMessageById,
 		forkChatById,
 		getAllTags,
 		getChatById,
@@ -121,7 +122,12 @@
 		updateChatParams,
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
-	import { resolveTerminalTarget, setCwd, type FilesystemFile } from '$lib/apis/terminal';
+	import {
+		listTerminalSkills,
+		resolveTerminalTarget,
+		setCwd,
+		type FilesystemFile
+	} from '$lib/apis/terminal';
 	import { generateOpenAIChatCompletion, getErrorMessage } from '$lib/apis/openai';
 	import { processUrl, processWebSearch } from '$lib/apis/retrieval';
 	import {
@@ -176,7 +182,8 @@
 	export let chatIdProp = '';
 	export let initialPage = '';
 	let mainChatHref = '/';
-	$: if ($chatId) mainChatHref = `/c/${$chatId}`;
+	// Unsaved chats have no /c/ page, so they keep the new-chat address set by initNewChat.
+	$: if (isSavedChatId($chatId)) mainChatHref = `/c/${$chatId}`;
 	export let embedded = false;
 	export let tabbed = false;
 	const chatId = embedded ? writable('') : _chatId;
@@ -196,7 +203,8 @@
 		models,
 		temporary: temporaryChat,
 		audioQueue,
-		submitPrompt: (prompt) => submitHandler(prompt)
+		submitPrompt: (prompt) => submitHandler(prompt),
+		getCurrentDirectory: (terminalId) => tabs?.getCurrentDirectory(terminalId)
 	});
 	export let embeddedTitle = '';
 	export let embeddedChats = [];
@@ -263,7 +271,7 @@
 						return;
 					}
 					window.history.replaceState(window.history.state, '', `${location.pathname}${search}`);
-					if ($chatId) await initNewChat(false, false, value);
+					if ($chatId) await initNewChat({ temporary: value });
 					else temporaryChat.set(value);
 				};
 
@@ -1014,6 +1022,7 @@
 	onDestroy(() => chatLoadController.abort());
 	const navigateHandler = async () => {
 		loading = true;
+		selectedFolder.set(null);
 		tabs?.resetForChatSwitch();
 		const signal = startChatLoad();
 		modelDefaults = null;
@@ -1102,7 +1111,7 @@
 			({ prompt, files } = embeddedDraft);
 			messageInput?.setText(prompt);
 		}
-		messageInput?.focus({ preventScroll: true });
+		if (!$mobile) messageInput?.focus({ preventScroll: true });
 		if (initialPrompt) {
 			await tick();
 			submitHandler(initialPrompt);
@@ -1296,6 +1305,19 @@
 		) {
 			void refreshAgentModels();
 		}
+	}
+
+	// Sent skill mentions and the + menu's Skills entry need the terminal's skills before any list opens.
+	$: {
+		const terminalId = $selectedTerminalId;
+		void listTerminalSkills(
+			resolveTerminalTarget(terminalId, $terminalServers ?? [], localStorage.token, {
+				chatId: $chatId || null,
+				modelId: selectedModels[0] ?? null
+			})
+		).then((items) => {
+			if (terminalId === $selectedTerminalId) terminalSkills.set(items);
+		});
 	}
 
 	const applyFolderTerminal = (folder: any) => {
@@ -2167,16 +2189,6 @@
 		);
 		audioQueue.set(audioQueueInstance);
 
-		if (
-			!embedded &&
-			(initialPage || $page.url.pathname === '/' || $page.url.pathname.startsWith('/folders/'))
-		) {
-			tick().then(async () => {
-				await initNewChat();
-				if (initialPage) tabs?.openPageTab({ href: initialPage, label: '' });
-			});
-		}
-
 		const selectedFolderSubscribe = selectedFolder.subscribe(async (folder) => {
 			await tick();
 			// Navigation applies defaults in initNewChat; only explicit settings edits reach here.
@@ -2225,9 +2237,13 @@
 				await restoreChatInput(storageChatInput);
 			}
 
-			messageInput?.focus({ preventScroll: true });
+			if (!$mobile) messageInput?.focus({ preventScroll: true });
 		};
-		init();
+		if (embedded) init();
+		else
+			void tick().then(() => {
+				if (!routeInitialized) void followRoute();
+			});
 
 		return () => {
 			try {
@@ -2239,6 +2255,7 @@
 				}
 				if (appLayout?.initNewChat === initNewChat) delete appLayout.initNewChat;
 				selectedFolderSubscribe();
+				if (!embedded) selectedFolder.set(null);
 
 				// Clear the selected chat when leaving the chat surface (e.g. navigating
 				// to the admin panel), otherwise the previously-viewed chat stays selected
@@ -2723,25 +2740,31 @@
 		});
 		return () => bridge?.end();
 	});
-	// Only real navigation resets the chat; shallow sidebar state changes must preserve it.
-	afterNavigate(async ({ from, to }) => {
-		// A navigation that mounts this page starts its new chat in onMount.
-		if (
-			!embedded &&
-			from?.route.id === to?.route.id &&
-			(to?.url.pathname === '/' || to?.url.pathname.startsWith('/folders/'))
-		) {
-			await tick();
-			initNewChat();
+	// The layout keeps this component mounted; route changes update only the main pane.
+	let routeInitialized = false;
+	const followRoute = async () => {
+		const preserveTabs = routeInitialized;
+		routeInitialized = true;
+		await tick();
+		if ($page.route.id === '/(app)/c/[id]') {
+			chatIdProp = $page.params.id ?? '';
+		} else if ($page.params.folderId || $page.url.pathname === '/') {
+			selectedFolder.set($page.data.folder ?? null);
+			await initNewChat({ preserveTabs, url: $page.url });
+		} else if (initialPage) {
+			if (!preserveTabs) await initNewChat();
+			loading = false;
+			tabs?.openPageTab({ href: initialPage, label: '' });
 		}
+	};
+	afterNavigate(() => {
+		if (!embedded) void followRoute();
 		stopAudio();
 	});
 	beforeNavigate(() => {
+		if (!loading && !$temporaryChat) void saveDraft(getChatInputDraft(), getDraftChatId(), false);
 		bridge?.end();
 		pendingUrlActions = null;
-	});
-	onNavigate(({ from, to }) => {
-		if (!embedded && to && from?.url.pathname !== to.url.pathname) loading = true;
 	});
 	$: if (!$user && (bridge?.connected || bridge?.connecting)) bridge.end();
 	$: if (selectedModelIds && $models && $config) bridge?.syncModel();
@@ -2876,24 +2899,22 @@
 		showTabs.set(true);
 	};
 
-	const initNewChat = async (preserveTabs = false, keepDraft = false, temporary?: boolean) => {
+	const initNewChat: NonNullable<AppLayoutContext['initNewChat']> = async ({
+		preserveTabs = false,
+		temporary,
+		url = initialPage || preserveTabs ? undefined : $page.url
+	} = {}) => {
+		if (!loading && !$temporaryChat) void saveDraft(getChatInputDraft(), getDraftChatId(), false);
 		const destinationFolder = $selectedFolder
 			? (structuredClone($selectedFolder) as FolderDetails)
 			: null;
-		const retainedDraft =
-			keepDraft && !$chatId && !history.currentId ? JSON.stringify(getChatInputDraft()) : null;
-		const searchParams =
-			initialPage || preserveTabs ? new URLSearchParams() : $page.url.searchParams;
-		const previousHref = mainChatHref;
+		const searchParams = url?.searchParams ?? new URLSearchParams();
 		mainChatHref = '/';
-		if (!initialPage && !preserveTabs && $page.url.pathname === '/') {
-			mainChatHref += $page.url.search + $page.url.hash;
+		if (url?.pathname === '/') {
+			mainChatHref += url.search + url.hash;
 		}
 		if (destinationFolder?.id) mainChatHref = `/folders/${destinationFolder.id}`;
-		if (keepDraft && !$chatId && !history.currentId && previousHref === mainChatHref) {
-			tabs?.focusMainChat();
-			return;
-		}
+
 		if (preserveTabs) tabs?.carryPagesToNewChat();
 		else tabs?.resetForChatSwitch();
 		loading = true;
@@ -2922,7 +2943,9 @@
 
 		const param = searchParams.get('temporary-chat');
 		temporaryChat.set(
-			($user?.role !== 'admin' && !!$user?.permissions?.chat?.temporary_enforced) ||
+			($user?.role !== 'admin' &&
+				!!$user?.permissions?.chat?.temporary &&
+				!!$user?.permissions?.chat?.temporary_enforced) ||
 				(!!canUseTemporaryChats({ user: $user, config: $config }) &&
 					(temporary ?? (param ? param === 'true' : !!$settings?.temporaryChatByDefault)))
 		);
@@ -3034,9 +3057,9 @@
 		autoScroll = true;
 
 		// resetInput() must stay last: the selected model's defaults override the draft's selection.
-		const chatInputPrompt = (await restoreChatInput(
-			retainedDraft ?? sessionStorage.getItem(getChatInputKey())
-		))
+		prompt = '';
+		files = [];
+		const chatInputPrompt = (await restoreChatInput(sessionStorage.getItem(getChatInputKey())))
 			? prompt
 			: null;
 		const previousChatId = $chatId;
@@ -3170,7 +3193,7 @@
 
 		await tick();
 		if (preserveTabs) tabs?.focusMainChat();
-		messageInput?.focus({ preventScroll: true });
+		if (!$mobile) messageInput?.focus({ preventScroll: true });
 	};
 
 	const loadChat = async (signal = startChatLoad()) => {
@@ -3403,7 +3426,7 @@
 						({ prompt, files } = embeddedDraft);
 						messageInput?.setText(prompt);
 					}
-					messageInput?.focus({ preventScroll: true });
+					if (!$mobile) messageInput?.focus({ preventScroll: true });
 				}
 				return true;
 			} else {
@@ -3493,7 +3516,9 @@
 		if (!queue || queue.length === 0 || queue[0].error) return;
 		const lastMessage = history.currentId ? history.messages[history.currentId] : null;
 		if (
-			(lastMessage && lastMessage.role === 'assistant' && !lastMessage.done) ||
+			(lastMessage?.role === 'assistant' &&
+				!lastMessage.done &&
+				!usesBackendQueue(queue.flatMap((m) => m.files ?? []))) ||
 			queue.some((m) =>
 				(m.files ?? []).some((file) => ['uploading', 'error'].includes(file.status))
 			)
@@ -3536,7 +3561,52 @@
 		}
 	};
 
+	// The backend queues messages sent to your own saved chat while a reply runs; the reply ends at its next
+	// step and they are answered next. Files on a terminal stay in this browser's queue.
+	const usesBackendQueue = (messageFiles: any[] = []) =>
+		($settings?.enableMessageQueue ?? true) &&
+		!$temporaryChat &&
+		!!$chatId &&
+		!isTemporaryChatId($chatId) &&
+		(chat?.user_id ?? $user?.id) === $user?.id &&
+		!messageFiles.some((file) => file.type === 'filesystem');
+
+	// Messages the backend queued under the reply shown, listed with the browser's queue.
+	$: backendQueue = (
+		(history.currentId ? history.messages[history.currentId]?.childrenIds : null) ?? []
+	)
+		.map((id: string) => history.messages[id])
+		.filter(
+			(message: any) =>
+				message?.role === 'user' &&
+				message.meta?.status === 'pending' &&
+				message.meta?.internal !== true
+		);
+	$: messageQueue = [
+		...backendQueue.map((message: any) => ({
+			id: message.id,
+			prompt: message.content,
+			files: message.files ?? []
+		})),
+		...($chatRequestQueues[$chatId] ?? [])
+	];
+
+	const removeFromBackendQueue = async (id: string) => {
+		const message = history.messages[id];
+		await deleteChatMessageById(localStorage.token, $chatId, id);
+		const parent = history.messages[message?.parentId];
+		if (parent) parent.childrenIds = parent.childrenIds.filter((childId: string) => childId !== id);
+		delete history.messages[id];
+		history = history;
+		return message;
+	};
+
 	const sendQueuedMessageNow = async (id) => {
+		if (history.messages[id]?.meta?.status === 'pending') {
+			// Stopping the reply answers its queued messages right away.
+			await stopResponse(false);
+			return;
+		}
 		if (processingQueueChats.has($chatId)) return;
 
 		const queue = $chatRequestQueues[$chatId] ?? [];
@@ -3571,6 +3641,16 @@
 	};
 
 	const editQueuedMessage = async (id) => {
+		if (history.messages[id]?.meta?.status === 'pending') {
+			const message = await removeFromBackendQueue(id).catch((error) => {
+				toast.error(`${error}`);
+				return null;
+			});
+			if (!message) return;
+			files = message.files ?? [];
+			messageInput?.setText(message.content);
+			return;
+		}
 		const queue = $chatRequestQueues[$chatId] ?? [];
 		const item = queue.find((m) => m.id === id);
 		if (!item) return;
@@ -3586,6 +3666,10 @@
 	};
 
 	const deleteQueuedMessage = async (id) => {
+		if (history.messages[id]?.meta?.status === 'pending') {
+			await removeFromBackendQueue(id).catch((error) => toast.error(`${error}`));
+			return;
+		}
 		const queue = $chatRequestQueues[$chatId] ?? [];
 		chatRequestQueues.update((q) => ({
 			...q,
@@ -3984,6 +4068,13 @@
 			(item, index, array) => array.findIndex((i) => equal(i, item)) === index
 		);
 
+		const runningReply = history.currentId ? history.messages[history.currentId] : null;
+		const queued =
+			!bridgeRequest &&
+			runningReply?.role === 'assistant' &&
+			runningReply.done === false &&
+			usesBackendQueue(_files);
+
 		// Create user message
 		let userMessageId = bridgeRequest?.userMessageId ?? uuidv4();
 		let userMessage = {
@@ -3996,7 +4087,8 @@
 			content: inputContent,
 			files: _files.length > 0 ? _files : undefined,
 			timestamp: Math.floor(Date.now() / 1000), // Unix epoch
-			models: selectedModels
+			models: selectedModels,
+			...(queued ? { meta: { status: 'pending' } } : {})
 		};
 
 		// A transcribed Bridge message already exists in the same history.
@@ -4009,7 +4101,9 @@
 			history.messages[history.currentId].childrenIds.push(userMessageId);
 		}
 
-		history.currentId = userMessageId;
+		// A queued message waits in the queue list; the running reply stays the end of the transcript.
+		if (!queued) history.currentId = userMessageId;
+		else history = history;
 
 		// focus on chat input (skip during voice call to avoid triggering mobile keyboard)
 		if (!$voiceCall) {
@@ -4502,13 +4596,16 @@
 		const currentHistory = history;
 		processing = 'uploading';
 		try {
-			if (files.some((file) => file.status === 'pending' && file.file instanceof File)) {
-				const _chatId = await getChatId(currentHistory);
-				if (_chatId === null) return { status: 'rejected' };
-				if (history !== currentHistory) return { status: 'rejected' };
-				if (!(await messageInput?.uploadPendingFiles(_chatId || (await initChatHandler(history)))))
-					return { status: 'rejected' };
-			}
+			// Set up the chat before the message is posted and the input cleared, so a refusal
+			// (e.g. a missing working directory) leaves the draft in place.
+			const _chatId = await getChatId(currentHistory);
+			if (_chatId === null) return { status: 'rejected' };
+			if (history !== currentHistory) return { status: 'rejected' };
+			if (
+				files.some((file) => file.status === 'pending' && file.file instanceof File) &&
+				!(await messageInput?.uploadPendingFiles(_chatId || (await initChatHandler(history))))
+			)
+				return { status: 'rejected' };
 			if (history !== currentHistory) return { status: 'rejected' };
 		} catch (error) {
 			toast.error(`${error}`);
@@ -4543,7 +4640,7 @@
 				)
 			: lastMessage && lastMessage.role === 'assistant' && !lastMessage.done;
 
-		if (isGenerating) {
+		if (isGenerating && (bridgeRequest || !usesBackendQueue(files))) {
 			if (bridgeRequest) return { status: 'deferred' };
 			if ($settings?.enableMessageQueue ?? true) {
 				// Enqueue the request
@@ -4627,6 +4724,10 @@
 			history.messages[parentId].models = [...selectedModelIds];
 		}
 
+		// A queued message gets no reply on screen unless the backend answers it now.
+		const queued = history.messages[parentId]?.meta?.status === 'pending';
+		const target = queued ? structuredClone(history) : history;
+
 		// Use a message_ids array with modelIdx to preserve separate columns for duplicate models.
 		const messageIdsList: Array<{ model_id: string; message_id: string; modelIdx: number }> = [];
 		for (const [_modelIdx, modelId] of selectedModelIds.entries()) {
@@ -4649,13 +4750,13 @@
 				};
 
 				// Add message to history and Set currentId to messageId
-				history.messages[responseMessageId] = responseMessage;
-				history.currentId = responseMessageId;
+				target.messages[responseMessageId] = responseMessage;
+				target.currentId = responseMessageId;
 
 				// Append messageId to childrenIds of parent message
-				if (parentId !== null && history.messages[parentId]) {
-					history.messages[parentId].childrenIds = [
-						...history.messages[parentId].childrenIds,
+				if (parentId !== null && target.messages[parentId]) {
+					target.messages[parentId].childrenIds = [
+						...target.messages[parentId].childrenIds,
 						responseMessageId
 					];
 				}
@@ -4673,7 +4774,7 @@
 		await tick();
 
 		// Re-clone history so sendMessageSocket gets the response messages we just added
-		_history = structuredClone(history);
+		_history = structuredClone(target);
 
 		// Vision capability check
 		for (const mid of selectedModelIds) {
@@ -4982,7 +5083,11 @@
 				id: responseMessageId,
 				...(messageIdsList ? { message_ids: messageIdsList } : {}),
 				parent_id: userMessage?.parentId ?? null,
-				user_message: userMessage,
+				// Whether a message is queued is the backend's call, not a status the browser sends.
+				user_message:
+					userMessage?.meta?.status === 'pending'
+						? { ...userMessage, meta: { ...userMessage.meta, status: undefined } }
+						: userMessage,
 				...(regenerationPrompt ? { regeneration_prompt: regenerationPrompt } : {}),
 				...(regenerationMessageId ? { regeneration_message_id: regenerationMessageId } : {}),
 				...(continueResponse ? { assistant_message_id: responseMessageId } : {}),
@@ -5031,6 +5136,32 @@
 
 		if (filesystemAttachment && (!res || res.error))
 			throw new Error('File request failed. Retry from the message or queue.');
+		const placeholderIds = (messageIdsList ?? [{ message_id: responseMessageId }]).map(
+			({ message_id }) => message_id
+		);
+		const sentMessage = history.messages[userMessage.id];
+		if (res?.queued && sentMessage) {
+			// Queued for the running reply, which ends at its next step; the answer arrives with a chat reload.
+			for (const id of placeholderIds) delete history.messages[id];
+			sentMessage.childrenIds = sentMessage.childrenIds.filter(
+				(id: string) => !placeholderIds.includes(id)
+			);
+			sentMessage.meta = { ...(sentMessage.meta ?? {}), status: 'pending' };
+			if (placeholderIds.includes(history.currentId)) history.currentId = sentMessage.parentId;
+			history = history;
+			return res;
+		}
+		if (res && !res.error && sentMessage?.meta?.status === 'pending') {
+			// The reply had already finished, so the backend answered it as a normal turn.
+			sentMessage.meta = { ...sentMessage.meta, status: undefined };
+			for (const id of placeholderIds) {
+				if (!_history.messages[id]) continue;
+				history.messages[id] = _history.messages[id];
+				if (!sentMessage.childrenIds.includes(id)) sentMessage.childrenIds.push(id);
+			}
+			history.currentId = responseMessageId;
+			history = history;
+		}
 		if (res) {
 			if (res.error) {
 				await handleOpenAIError(res.error, responseMessage);
@@ -5433,8 +5564,12 @@
 	let saveDraftTimeout: ReturnType<typeof setTimeout> | null = null;
 	// chatIdProp is empty for chats started from the home page (URL set via replaceState)
 	const getDraftChatId = () => chatIdProp || $chatId || embeddedDraftKey || null;
-	const getChatInputKey = (chatId: string | null = null) =>
-		`chat-input${chatId ? `-${chatId}` : ''}`;
+	const getChatInputKey = (chatId: string | null = null) => {
+		if (chatId) return `chat-input-${chatId}`;
+		// Use the displayed pane: selectedFolder may already point to the destination.
+		const folderId = !embedded && mainChatHref.match(/^\/folders\/([^/?#]+)/)?.[1];
+		return folderId ? `chat-input-folder-${folderId}` : 'chat-input';
+	};
 
 	const getChatInputDraft = () => ({
 		prompt,
@@ -5840,7 +5975,7 @@
 				style="background-image: url({backgroundImage})"
 			/>
 			<div
-				class="pointer-events-none absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/85 dark:from-gray-900 dark:to-gray-900/90 z-0"
+				class="pointer-events-none absolute top-0 left-0 w-full h-full bg-linear-to-t from-white/90 to-white/55 dark:from-gray-900/90 dark:to-gray-900/65 z-0"
 			></div>
 		{/if}
 
@@ -5850,6 +5985,7 @@
 				class:hidden={fullWidthTabs && !mainChatActive}
 				style={fullWidthTabs ? mainChatStyle : undefined}
 				data-main-chat-pane
+				data-chat-id={$chatId}
 				data-panel-group={fullWidthTabs ? mainChatGroupId : undefined}
 				on:focusin={() => fullWidthTabs && tabs?.focusMainChat()}
 				on:pointerdown={() => fullWidthTabs && tabs?.focusMainChat()}
@@ -6089,14 +6225,14 @@
 										{createMessagePair}
 										{onUpload}
 										{onUpdate}
-										messageQueue={$chatRequestQueues[$chatId] ?? []}
+										{messageQueue}
 										{chatTasks}
 										askUser={savedAskUserPrompt ?? socketAskUserPrompt}
 										onQueueSendNow={sendQueuedMessageNow}
 										onQueueEdit={editQueuedMessage}
 										onQueueDelete={deleteQueuedMessage}
 										onChange={(data: any) => {
-											if (!$temporaryChat) {
+											if (!loading && !$temporaryChat) {
 												saveDraft(data, getDraftChatId());
 											}
 										}}
@@ -6208,14 +6344,14 @@
 										{createMessagePair}
 										{onUpload}
 										{onUpdate}
-										messageQueue={$chatRequestQueues[$chatId] ?? []}
+										{messageQueue}
 										{chatTasks}
 										askUser={savedAskUserPrompt ?? socketAskUserPrompt}
 										onQueueSendNow={sendQueuedMessageNow}
 										onQueueEdit={editQueuedMessage}
 										onQueueDelete={deleteQueuedMessage}
 										onChange={(data: any) => {
-											if (!$temporaryChat) {
+											if (!loading && !$temporaryChat) {
 												saveDraft(data, getDraftChatId());
 											}
 										}}
@@ -6276,7 +6412,7 @@
 									{onSelect}
 									{onUpload}
 									{onUpdate}
-									messageQueue={$chatRequestQueues[$chatId] ?? []}
+									{messageQueue}
 									askUser={savedAskUserPrompt ?? socketAskUserPrompt}
 									onQueueSendNow={sendQueuedMessageNow}
 									onQueueEdit={editQueuedMessage}
@@ -6286,7 +6422,7 @@
 										showChatVariablesModal = true;
 									}}
 									onChange={(data: any) => {
-										if (!$temporaryChat) {
+										if (!loading && !$temporaryChat) {
 											saveDraft(data, getDraftChatId());
 										}
 									}}

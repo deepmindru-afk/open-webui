@@ -79,6 +79,8 @@
 	let agentModels: AgentModel[] = [];
 	let scheduleDropdown: ScheduleDropdown;
 	let scheduleTick = 0;
+	// The stored rule as the schedule fields rebuild it, so an untouched schedule is not a change.
+	let savedRrule = '';
 	let saving = false;
 	let fieldsReady = false;
 
@@ -93,6 +95,7 @@
 		terminalCwd = source.data.terminal?.cwd ?? '';
 		await tick();
 		scheduleDropdown?.parseRrule(source.data.rrule);
+		savedRrule = scheduleDropdown?.buildRrule?.() ?? source.data.rrule;
 		scheduleTick++;
 		fieldsReady = true;
 	}
@@ -108,7 +111,7 @@
 			channel_id !== (automation.data.target?.channel_id ?? '') ||
 			terminalServerId !== (automation.data.terminal?.server_id ?? '') ||
 			terminalCwd.trim() !== (automation.data.terminal?.cwd ?? '') ||
-			rruleNow(scheduleTick) !== automation.data.rrule);
+			rruleNow(scheduleTick) !== savedRrule);
 
 	// Agent models depend on the chosen terminal, as in the automation modal.
 	let modelRequest = 0;
@@ -141,13 +144,15 @@
 		}
 		saving = true;
 		try {
+			const rrule = scheduleDropdown.buildRrule();
 			const form: AutomationForm = {
 				name: name.trim(),
 				folder_id: target_type === 'channel' ? null : folder_id || null,
 				data: {
 					prompt: prompt.trim(),
 					model_id: model_id.trim(),
-					rrule: scheduleDropdown.buildRrule(),
+					// An untouched schedule keeps its stored start date.
+					rrule: rrule === savedRrule ? automation.data.rrule : rrule,
 					terminal: terminalServerId
 						? { server_id: terminalServerId, cwd: terminalCwd.trim() || undefined }
 						: undefined,
@@ -548,6 +553,13 @@
 							aria-hidden="true"><circle cx="8" cy="8" r="5.75" /><path d="M8 5v3l2 1.5" /></svg
 						>{$i18n.t('Next run')}
 					</span>
+					<!-- localisation keys kept from the previous runs list (so they don't get automatically removed):
+						{$i18n.t('Runs')}
+						{$i18n.t('Last run')}
+						{$i18n.t('No runs yet')}
+						{$i18n.t('View chat')}
+						{$i18n.t('View channel')}
+					-->
 					<span
 						class="min-w-0 flex-1 truncate text-xs {is_active
 							? 'text-gray-700 dark:text-gray-300'

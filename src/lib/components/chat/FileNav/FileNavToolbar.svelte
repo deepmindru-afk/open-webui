@@ -131,7 +131,7 @@
 />
 
 <div
-	class="m-0 flex items-center gap-1 px-1 pt-0 pb-1.5 shrink-0 border-b border-gray-50 dark:border-gray-850/30"
+	class="m-0 flex items-center gap-1 px-1 pt-0 pb-1.5 shrink-0 border-b border-gray-200/40 dark:border-gray-850/20"
 >
 	<div class="flex shrink-0 items-center gap-0.5 px-1">
 		<!-- Back -->
@@ -168,10 +168,12 @@
 	{#if typingPath}
 		<input
 			bind:this={pathInput}
-			value={breadcrumbs.at(-1)?.path ?? ''}
+			value={selectedFile ?? breadcrumbs.at(-1)?.path ?? ''}
+			readonly={!!selectedFile}
 			class="min-w-0 flex-1 bg-transparent text-xs text-gray-800 outline-hidden dark:text-gray-200"
 			aria-label={$i18n.t('Path')}
 			on:keydown={(e) => {
+				if (selectedFile && e.key !== 'Escape') return;
 				if (e.key === 'Enter' && !e.isComposing) {
 					goToPath();
 				} else if (e.key === 'Tab' && listFolders) {
