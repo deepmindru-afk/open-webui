@@ -10,7 +10,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from open_webui.config import (
     BYPASS_ADMIN_ACCESS_CONTROL,
     ENABLE_KNOWLEDGE_FILE_RETENTION,
@@ -2301,24 +2301,26 @@ async def export_knowledge_by_id(id: str, user=Depends(get_admin_user), db: Asyn
 
     # Create zip file in memory
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for file in files:
-            content = file.data.get('content', '') if file.data else ''
-            if content:
-                # Use original filename with .txt extension
-                filename = file.filename
-                if not filename.endswith('.txt'):
-                    filename = f'{filename}.txt'
-                zf.writestr(filename, content)
 
-    zip_buffer.seek(0)
+    def write_zip():
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file in files:
+                content = file.data.get('content', '') if file.data else ''
+                if content:
+                    # Use original filename with .txt extension
+                    filename = file.filename
+                    if not filename.endswith('.txt'):
+                        filename = f'{filename}.txt'
+                    zf.writestr(filename, content)
+
+    await asyncio.to_thread(write_zip)
 
     # Sanitize knowledge name for filename
     safe_name = ''.join(c if c.isalnum() or c in ' -_' else '_' for c in knowledge.name)
     zip_filename = f'{safe_name}.zip'
 
-    return StreamingResponse(
-        zip_buffer,
+    return Response(
+        content=zip_buffer.getvalue(),
         media_type='application/zip',
         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(zip_filename, safe='')}"},
     )
