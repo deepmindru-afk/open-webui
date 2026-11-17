@@ -4,14 +4,24 @@ import re
 import time
 from itertools import zip_longest
 from typing import Any, Optional
+from urllib.parse import quote
 
+import aiohttp
+from open_webui.env import AIOHTTP_CLIENT_SESSION_SSL
 from open_webui.models.config import Config
 from open_webui.models.knowledge import KnowledgeModel
+from open_webui.utils.session_pool import get_session
 
 log = logging.getLogger(__name__)
 
 EXTERNAL_KNOWLEDGE_CONNECTIONS_CONFIG_KEY = 'external_knowledge.connections'
 IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+# OpenAI caps vector store search at 50 results and list pages at 100 stores.
+OPENAI_VECTOR_STORE_MAX_RESULTS = 50
+OPENAI_VECTOR_STORE_PAGE_SIZE = 100
+# Stops a server that always reports more pages; allows 10,000 stores.
+OPENAI_VECTOR_STORE_MAX_PAGES = 100
 
 
 async def _get_external_connection(connection_id: str) -> Optional[dict]:
@@ -291,6 +301,167 @@ async def _retrieve_pgvector(connection, auth_config, knowledge, query, count, e
     return [_normalize_result(row, mapping, knowledge, distance=row.get('distance')) for row in rows]
 
 
+async def _openai_vector_store_request(
+    connection: dict,
+    auth_config: Optional[dict],
+    method: str,
+    path: str,
+    params: Optional[dict] = None,
+    json: Optional[dict] = None,
+) -> dict:
+    """Call an OpenAI-compatible vector store API (OpenAI, LiteLLM, Azure OpenAI v1 at /openai/v1)."""
+    base_url = (connection.get('endpoint') or '').strip().rstrip('/')
+    if not base_url:
+        raise RuntimeError('Endpoint is not configured')
+
+    headers = {'Accept': 'application/json'}
+    api_key = (auth_config or {}).get('api_key')
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    timeout = aiohttp.ClientTimeout(total=(connection.get('config') or {}).get('timeout') or 30)
+    session = await get_session()
+    try:
+        async with session.request(
+            method,
+            f'{base_url}{path}',
+            headers=headers,
+            params=params,
+            json=json,
+            timeout=timeout,
+            ssl=AIOHTTP_CLIENT_SESSION_SSL,
+        ) as r:
+            if r.status >= 400:
+                detail = (await r.text())[:500]
+                raise RuntimeError(f'Vector store request failed ({r.status}): {detail}')
+            try:
+                data = await r.json(content_type=None)
+            except ValueError as exc:
+                raise RuntimeError(f'Vector store endpoint returned a non-JSON response ({r.status})') from exc
+    except aiohttp.ClientError as exc:
+        raise RuntimeError(f'Vector store request failed: {exc}') from exc
+
+    if not isinstance(data, dict):
+        raise RuntimeError('Vector store endpoint returned an unexpected response')
+    return data
+
+
+def get_vector_store_ids(source: dict) -> list[str]:
+    """Store IDs a text-search source covers; older sources keep a single ID in `name`."""
+    ids = (source.get('config') or {}).get('vector_store_ids')
+    if not isinstance(ids, list):
+        ids = (source.get('name') or '').split(',')
+    return list(dict.fromkeys(str(store_id).strip() for store_id in ids if str(store_id).strip()))
+
+
+async def _search_openai_vector_store(connection, auth_config, knowledge, vector_store_id, query, count) -> list[dict]:
+    data = await _openai_vector_store_request(
+        connection,
+        auth_config,
+        'POST',
+        f'/vector_stores/{quote(vector_store_id, safe="")}/search',
+        json={
+            'query': query,
+            'max_num_results': max(1, min(count, OPENAI_VECTOR_STORE_MAX_RESULTS)),
+        },
+    )
+
+    normalized = []
+    for item in data.get('data') or []:
+        if not isinstance(item, dict):
+            continue
+        content = '\n'.join(
+            part['text']
+            for part in item.get('content') or []
+            if isinstance(part, dict) and isinstance(part.get('text'), str) and part['text']
+        )
+        if not content:
+            continue
+        attributes = item.get('attributes') if isinstance(item.get('attributes'), dict) else {}
+        result = {
+            'content': content,
+            'title': item.get('filename'),
+            # Kept from the file's attributes, which _normalize_result would otherwise overwrite.
+            'url': attributes.get('url'),
+            'document_id': item.get('file_id'),
+            'metadata': attributes,
+            'score': item.get('score'),
+        }
+        normalized.append(_normalize_result(result, {}, knowledge, distance=item.get('score')))
+    return normalized[:count]
+
+
+async def _retrieve_openai(connection, auth_config, knowledge, query, count, embedding_function) -> list[dict]:
+    # The server embeds the query, so the Open WebUI embedding model is not involved.
+    source = (knowledge.meta or {}).get('external', {}).get('source') or {}
+    vector_store_ids = get_vector_store_ids(source)
+    if not vector_store_ids:
+        raise RuntimeError('Vector store ID is not configured')
+
+    results = await asyncio.gather(
+        *(
+            _search_openai_vector_store(connection, auth_config, knowledge, store_id, query, count)
+            for store_id in vector_store_ids
+        ),
+        return_exceptions=True,
+    )
+    # One unreachable store should not hide the others; fail only when every store failed.
+    failures = [result for result in results if isinstance(result, BaseException)]
+    for store_id, result in zip(vector_store_ids, results):
+        if isinstance(result, BaseException):
+            log.warning('Vector store %s search failed: %s', store_id, result)
+    if len(failures) == len(results):
+        raise failures[0]
+
+    # Stores may sit on different backends with incomparable scores, so interleave by rank.
+    merged = [
+        chunk
+        for chunks_at_rank in zip_longest(*(result for result in results if not isinstance(result, BaseException)))
+        for chunk in chunks_at_rank
+        if chunk
+    ]
+    return merged[:count]
+
+
+async def list_openai_vector_stores(connection: dict) -> list[dict]:
+    """List the vector stores a connection can search, as {id, name}.
+
+    LiteLLM's registry comes first since it covers every backend LiteLLM proxies; servers without
+    it (OpenAI, Azure) are listed through the OpenAI vector stores API.
+    """
+    auth_config = connection.get('auth_config') or {}
+
+    try:
+        data = await _openai_vector_store_request(
+            connection, auth_config, 'GET', '/vector_store/list', params={'page_size': 1000}
+        )
+        if isinstance(data.get('data'), list):
+            return [
+                {'id': item['vector_store_id'], 'name': item.get('vector_store_name') or item['vector_store_id']}
+                for item in data['data']
+                if isinstance(item, dict) and item.get('vector_store_id')
+            ]
+    except RuntimeError:
+        pass
+
+    stores = []
+    after = None
+    for _ in range(OPENAI_VECTOR_STORE_MAX_PAGES):
+        data = await _openai_vector_store_request(
+            connection,
+            auth_config,
+            'GET',
+            '/vector_stores',
+            params={'limit': OPENAI_VECTOR_STORE_PAGE_SIZE, **({'after': after} if after else {})},
+        )
+        items = [item for item in data.get('data') or [] if isinstance(item, dict) and item.get('id')]
+        stores.extend({'id': item['id'], 'name': item.get('name') or item['id']} for item in items)
+        if not data.get('has_more') or not items:
+            break
+        after = data.get('last_id') or items[-1]['id']
+    return stores
+
+
 async def retrieve_external_knowledge(
     request,
     knowledge: KnowledgeModel,
@@ -330,6 +501,7 @@ async def retrieve_external_knowledge_for_connection(
         'qdrant': _retrieve_qdrant,
         'milvus': _retrieve_milvus,
         'pgvector': _retrieve_pgvector,
+        'openai': _retrieve_openai,
     }.get(provider)
     if not retrieve:
         raise RuntimeError(f'Unsupported external knowledge provider: {connection.get("provider")}')

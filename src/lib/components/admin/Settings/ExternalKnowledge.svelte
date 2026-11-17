@@ -18,6 +18,7 @@
 		createExternalKnowledgeSource,
 		getExternalKnowledgeConnections,
 		searchKnowledgeBases,
+		listExternalKnowledgeStores,
 		testExternalKnowledgeSource,
 		updateExternalKnowledgeConnection,
 		updateExternalKnowledgeSource,
@@ -55,8 +56,18 @@
 		};
 	};
 
+	// Providers that search by text server-side, so sources need no field mapping.
+	const TEXT_SEARCH_PROVIDERS = ['openai'];
+	const DEFAULT_PROVIDER = 'openai';
+
 	let loading = false;
 	let testing = false;
+	let verifying = false;
+	// Stores the connection can search, offered as suggestions for the Vector Store ID.
+	let storeOptions: { id: string; name: string }[] = [];
+	// A text-search knowledge base can cover several stores; results are merged.
+	let storeIds: string[] = [];
+	let storeIdInput = '';
 	let creating = false;
 	let showSourceModal = false;
 	let connections: ExternalKnowledgeConnection[] = [];
@@ -73,7 +84,7 @@
 	let sourceForm = {
 		name: '',
 		description: '',
-		provider: 'qdrant',
+		provider: DEFAULT_PROVIDER,
 		endpoint: '',
 		apiKey: '',
 		timeout: 30,
@@ -87,6 +98,8 @@
 		collectionField: 'collection_name',
 		testQuery: ''
 	};
+
+	$: textSearch = TEXT_SEARCH_PROVIDERS.includes(sourceForm.provider);
 
 	const schemaDefaults = (provider = sourceForm.provider) => {
 		if (provider === 'milvus') {
@@ -123,17 +136,20 @@
 		sourceForm = {
 			name: '',
 			description: '',
-			provider: 'qdrant',
+			provider: DEFAULT_PROVIDER,
 			endpoint: '',
 			apiKey: '',
 			timeout: 30,
 			dbName: '',
 			sourceName: '',
 			testQuery: '',
-			...schemaDefaults('qdrant')
+			...schemaDefaults(DEFAULT_PROVIDER)
 		};
 		accessGrants = [];
 		testResult = null;
+		storeOptions = [];
+		storeIds = [];
+		storeIdInput = '';
 		editingItem = null;
 		editingConnection = null;
 	};
@@ -174,6 +190,12 @@
 			tableName: sourceConfig.table_name ?? defaults.tableName,
 			collectionField: sourceConfig.collection_field ?? defaults.collectionField
 		};
+		storeIds = Array.isArray(sourceConfig.vector_store_ids)
+			? sourceConfig.vector_store_ids
+			: (source?.name ?? '')
+					.split(',')
+					.map((id: string) => id.trim())
+					.filter(Boolean);
 		accessGrants = structuredClone(item.access_grants ?? []);
 		showSourceModal = true;
 	};
@@ -200,6 +222,9 @@
 	};
 
 	const endpointPlaceholder = () => {
+		if (sourceForm.provider === 'openai') {
+			return 'http://litellm:4000/v1';
+		}
 		if (sourceForm.provider === 'pgvector') {
 			return 'postgresql://user:password@host:5432/db';
 		}
@@ -238,6 +263,14 @@
 	});
 
 	const sourcePayload = () => {
+		if (textSearch) {
+			return {
+				type: 'collection',
+				name: storeIds.join(', '),
+				config: { vector_store_ids: storeIds }
+			};
+		}
+
 		const config: Record<string, string> = {
 			content_field: sourceForm.contentField.trim(),
 			...(sourceForm.vectorField.trim() ? { vector_field: sourceForm.vectorField.trim() } : {}),
@@ -263,16 +296,61 @@
 
 	const testFormIsValid = () =>
 		!!sourceForm.endpoint.trim() &&
-		!!sourceForm.sourceName.trim() &&
-		!!sourceForm.contentField.trim() &&
-		(sourceForm.provider === 'qdrant' || !!sourceForm.vectorField.trim()) &&
-		(sourceForm.provider !== 'pgvector' ||
-			(!!sourceForm.tableName.trim() && !!sourceForm.collectionField.trim())) &&
+		(textSearch ? storeIds.length > 0 : !!sourceForm.sourceName.trim()) &&
+		(textSearch ||
+			(!!sourceForm.contentField.trim() &&
+				(sourceForm.provider === 'qdrant' || !!sourceForm.vectorField.trim()) &&
+				(sourceForm.provider !== 'pgvector' ||
+					(!!sourceForm.tableName.trim() && !!sourceForm.collectionField.trim())))) &&
 		!!sourceForm.testQuery.trim();
 
 	const sourceFormIsValid = () => !!sourceForm.name.trim() && testFormIsValid();
 
+	const loadStoreOptions = async () => {
+		const res = await listExternalKnowledgeStores(localStorage.token, {
+			...(editingConnection?.id ? { connection_id: editingConnection.id } : {}),
+			connection: connectionPayload()
+		}).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		storeOptions = res?.items ?? [];
+		return !!res;
+	};
+
+	// Checks the endpoint and key by listing the stores, which then fill the Vector Store ID suggestions.
+	const verifyConnection = async () => {
+		if (!sourceForm.endpoint.trim()) {
+			toast.error($i18n.t('Fill the required fields first.'));
+			return;
+		}
+
+		verifying = true;
+		if (await loadStoreOptions()) {
+			toast.success($i18n.t('Loaded {{COUNT}} vector stores.', { COUNT: storeOptions.length }));
+		}
+		verifying = false;
+	};
+
+	const addStoreIds = (value: string) => {
+		const ids = value
+			.split(',')
+			.map((id) => id.trim())
+			.filter((id) => id && !storeIds.includes(id));
+		if (ids.length) {
+			storeIds = [...storeIds, ...ids];
+			markUntested();
+		}
+		storeIdInput = '';
+	};
+
+	const removeStoreId = (id: string) => {
+		storeIds = storeIds.filter((item) => item !== id);
+		markUntested();
+	};
+
 	const testSource = async () => {
+		addStoreIds(storeIdInput);
 		if (!testFormIsValid()) {
 			toast.error($i18n.t('Fill the source fields and test query first.'));
 			return;
@@ -371,6 +449,7 @@
 
 	const submitSource = async () => {
 		if (creating) return;
+		addStoreIds(storeIdInput);
 		if (editingItem) {
 			await updateSource();
 		} else {
@@ -405,6 +484,7 @@
 			...sourceForm,
 			...schemaDefaults(sourceForm.provider)
 		};
+		storeOptions = [];
 		markUntested();
 	};
 
@@ -480,6 +560,7 @@
 										on:change={updateProvider}
 										selectClassName="text-sm"
 									>
+										<option value="openai">{$i18n.t('OpenAI-compatible')}</option>
 										<option value="qdrant">Qdrant</option>
 										<option value="milvus">Milvus</option>
 										<option value="pgvector">pgvector</option>
@@ -516,6 +597,39 @@
 										placeholder={endpointPlaceholder()}
 										required
 									/>
+
+									{#if textSearch}
+										<Tooltip
+											content={$i18n.t('Verify Connection')}
+											className="shrink-0 flex items-center mr-1"
+										>
+											<button
+												class="self-center p-1 bg-transparent hover:bg-gray-50/70 dark:hover:bg-gray-850/50 rounded-lg transition"
+												type="button"
+												on:click={verifyConnection}
+												disabled={verifying}
+												aria-label={$i18n.t('Verify Connection')}
+											>
+												{#if verifying}
+													<Spinner />
+												{:else}
+													<svg
+														xmlns="http://www.w3.org/2000/svg"
+														viewBox="0 0 20 20"
+														fill="currentColor"
+														class="w-4 h-4"
+														aria-hidden="true"
+													>
+														<path
+															fill-rule="evenodd"
+															d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
+															clip-rule="evenodd"
+														/>
+													</svg>
+												{/if}
+											</button>
+										</Tooltip>
+									{/if}
 								</div>
 							</div>
 						</div>
@@ -586,19 +700,63 @@
 							<div class="flex flex-col w-full">
 								<div class="flex justify-between mb-0.5">
 									<label class="text-xs text-gray-500" for="external-source-collection"
-										>{$i18n.t('Collection')}</label
+										>{textSearch ? $i18n.t('Vector Stores') : $i18n.t('Collection')}</label
 									>
 								</div>
-								<div class="flex flex-1 items-center">
+								{#if textSearch}
+									{#if storeIds.length > 0}
+										<div class="flex flex-wrap gap-1 mb-1">
+											{#each storeIds as id (id)}
+												<div
+													class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-850 px-2 py-0.5 text-xs"
+												>
+													<span class="line-clamp-1"
+														>{storeOptions.find((store) => store.id === id)?.name ?? id}</span
+													>
+													<button
+														class="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"
+														type="button"
+														aria-label={$i18n.t('Remove')}
+														on:click={() => removeStoreId(id)}
+													>
+														<XMark className="size-3" />
+													</button>
+												</div>
+											{/each}
+										</div>
+									{/if}
 									<input
 										id="external-source-collection"
 										class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
-										bind:value={sourceForm.sourceName}
-										on:input={markUntested}
-										placeholder="research-docs"
-										required
+										bind:value={storeIdInput}
+										on:change={() => addStoreIds(storeIdInput)}
+										on:keydown={(e) => {
+											if (e.key === 'Enter' || e.key === ',') {
+												e.preventDefault();
+												addStoreIds(storeIdInput);
+											}
+										}}
+										placeholder={$i18n.t('Add a vector store ID')}
+										list="external-source-stores"
+										autocomplete="off"
 									/>
-								</div>
+									<datalist id="external-source-stores">
+										{#each storeOptions.filter((store) => !storeIds.includes(store.id)) as store (store.id)}
+											<option value={store.id}>{store.name}</option>
+										{/each}
+									</datalist>
+								{:else}
+									<div class="flex flex-1 items-center">
+										<input
+											id="external-source-collection"
+											class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
+											bind:value={sourceForm.sourceName}
+											on:input={markUntested}
+											placeholder="research-docs"
+											required
+										/>
+									</div>
+								{/if}
 							</div>
 						</div>
 
@@ -642,81 +800,83 @@
 							</div>
 						{/if}
 
-						<div class="flex gap-2 mt-2">
-							<div class="flex flex-col flex-1">
-								<div class="flex justify-between mb-0.5">
-									<label class="text-xs text-gray-500" for="external-source-content-field"
-										>{$i18n.t('Content Field')}</label
-									>
+						{#if !textSearch}
+							<div class="flex gap-2 mt-2">
+								<div class="flex flex-col flex-1">
+									<div class="flex justify-between mb-0.5">
+										<label class="text-xs text-gray-500" for="external-source-content-field"
+											>{$i18n.t('Content Field')}</label
+										>
+									</div>
+									<div class="flex flex-1 items-center">
+										<input
+											id="external-source-content-field"
+											class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
+											bind:value={sourceForm.contentField}
+											on:input={markUntested}
+											placeholder={sourceForm.provider === 'pgvector' ? 'text' : 'payload.text'}
+											required
+										/>
+									</div>
 								</div>
-								<div class="flex flex-1 items-center">
-									<input
-										id="external-source-content-field"
-										class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
-										bind:value={sourceForm.contentField}
-										on:input={markUntested}
-										placeholder={sourceForm.provider === 'pgvector' ? 'text' : 'payload.text'}
-										required
-									/>
+
+								<div class="flex flex-col flex-1">
+									<div class="flex justify-between mb-0.5">
+										<label class="text-xs text-gray-500" for="external-source-vector-field">
+											{$i18n.t('Vector Field')}
+										</label>
+									</div>
+									<div class="flex flex-1 items-center">
+										<input
+											id="external-source-vector-field"
+											class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
+											bind:value={sourceForm.vectorField}
+											on:input={markUntested}
+											placeholder={sourceForm.provider === 'qdrant' ? $i18n.t('Default') : 'vector'}
+											required={sourceForm.provider !== 'qdrant'}
+										/>
+									</div>
 								</div>
 							</div>
 
-							<div class="flex flex-col flex-1">
-								<div class="flex justify-between mb-0.5">
-									<label class="text-xs text-gray-500" for="external-source-vector-field">
-										{$i18n.t('Vector Field')}
-									</label>
+							<div class="flex gap-2 mt-2">
+								<div class="flex flex-col flex-1">
+									<div class="flex justify-between mb-0.5">
+										<label class="text-xs text-gray-500" for="external-source-metadata-field"
+											>{$i18n.t('Metadata Field')}</label
+										>
+									</div>
+									<div class="flex flex-1 items-center">
+										<input
+											id="external-source-metadata-field"
+											class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
+											bind:value={sourceForm.metadataField}
+											on:input={markUntested}
+											placeholder={sourceForm.provider === 'pgvector'
+												? 'vmetadata'
+												: 'payload.metadata'}
+										/>
+									</div>
 								</div>
-								<div class="flex flex-1 items-center">
-									<input
-										id="external-source-vector-field"
-										class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
-										bind:value={sourceForm.vectorField}
-										on:input={markUntested}
-										placeholder={sourceForm.provider === 'qdrant' ? $i18n.t('Default') : 'vector'}
-										required={sourceForm.provider !== 'qdrant'}
-									/>
-								</div>
-							</div>
-						</div>
 
-						<div class="flex gap-2 mt-2">
-							<div class="flex flex-col flex-1">
-								<div class="flex justify-between mb-0.5">
-									<label class="text-xs text-gray-500" for="external-source-metadata-field"
-										>{$i18n.t('Metadata Field')}</label
-									>
-								</div>
-								<div class="flex flex-1 items-center">
-									<input
-										id="external-source-metadata-field"
-										class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
-										bind:value={sourceForm.metadataField}
-										on:input={markUntested}
-										placeholder={sourceForm.provider === 'pgvector'
-											? 'vmetadata'
-											: 'payload.metadata'}
-									/>
+								<div class="flex flex-col flex-1">
+									<div class="flex justify-between mb-0.5">
+										<label class="text-xs text-gray-500" for="external-source-document-id-field"
+											>{$i18n.t('Document ID Field')}</label
+										>
+									</div>
+									<div class="flex flex-1 items-center">
+										<input
+											id="external-source-document-id-field"
+											class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
+											bind:value={sourceForm.documentIdField}
+											on:input={markUntested}
+											placeholder="id"
+										/>
+									</div>
 								</div>
 							</div>
-
-							<div class="flex flex-col flex-1">
-								<div class="flex justify-between mb-0.5">
-									<label class="text-xs text-gray-500" for="external-source-document-id-field"
-										>{$i18n.t('Document ID Field')}</label
-									>
-								</div>
-								<div class="flex flex-1 items-center">
-									<input
-										id="external-source-document-id-field"
-										class="w-full text-sm bg-transparent outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700"
-										bind:value={sourceForm.documentIdField}
-										on:input={markUntested}
-										placeholder="id"
-									/>
-								</div>
-							</div>
-						</div>
+						{/if}
 
 						<div class="flex gap-2 mt-2">
 							<div class="flex flex-col w-full">
@@ -736,7 +896,7 @@
 									/>
 
 									<Tooltip
-										content={$i18n.t('Verify Connection')}
+										content={textSearch ? $i18n.t('Test') : $i18n.t('Verify Connection')}
 										className="shrink-0 flex items-center mr-1"
 									>
 										<button
@@ -744,7 +904,7 @@
 											type="button"
 											on:click={testSource}
 											disabled={testing}
-											aria-label={$i18n.t('Verify Connection')}
+											aria-label={textSearch ? $i18n.t('Test') : $i18n.t('Verify Connection')}
 										>
 											{#if testing}
 												<Spinner />
@@ -767,14 +927,16 @@
 									</Tooltip>
 								</div>
 
-								<div class="text-xs text-gray-500 mt-1">
-									<!-- LICENSE covers this Open WebUI wordmark.
+								{#if !textSearch}
+									<div class="text-xs text-gray-500 mt-1">
+										<!-- LICENSE covers this Open WebUI wordmark.
 										Do not alter, remove, obscure, or replace it except as LICENSE permits:
 										https://docs.openwebui.com/license. -->
-									{$i18n.t(
-										'External vectors must be generated with the same embedding model configured in Open WebUI.'
-									)}
-								</div>
+										{$i18n.t(
+											'External vectors must be generated with the same embedding model configured in Open WebUI.'
+										)}
+									</div>
+								{/if}
 							</div>
 						</div>
 
