@@ -92,6 +92,26 @@ export const skills: Writable<null | any[]> = writable(null);
 export const terminalSkills: Writable<any[]> = writable([]);
 export const functions = writable(null);
 
+export type ImageModel = {
+	id: string;
+	name: string;
+	model: string;
+	connection_id: string;
+	connection_name: string;
+	image_generation: boolean;
+	image_edit: boolean;
+};
+export const imageModels: Writable<null | ImageModel[]> = writable(null);
+
+export type VideoModel = {
+	id: string;
+	name: string;
+	model: string;
+	connection_id: string;
+	connection_name: string;
+};
+export const videoModels: Writable<null | VideoModel[]> = writable(null);
+
 export type WorkspaceSection = 'models' | 'knowledge' | 'prompts' | 'skills' | 'tools';
 export type WorkspaceAction = {
 	id: string;
@@ -426,6 +446,7 @@ type Config = {
 		enable_google_drive_integration: boolean;
 		enable_onedrive_integration: boolean;
 		enable_image_generation: boolean;
+		enable_video_generation: boolean;
 		enable_code_interpreter: boolean;
 		enable_admin_export: boolean;
 		enable_admin_chat_access: boolean;

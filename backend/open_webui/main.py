@@ -184,6 +184,7 @@ from open_webui.routers import (
     tools,
     users,
     utils,
+    videos,
 )
 from open_webui.routers.retrieval import (
     get_ef,
@@ -249,6 +250,7 @@ from open_webui.utils.chat_variables import (
 )
 from open_webui.utils.embeddings import generate_embeddings
 from open_webui.utils.headers import get_headers_and_cookies
+from open_webui.utils.images.connections import migrate_legacy_image_config
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.json_response import apply_orjson_http_json
 from open_webui.utils.logger import start_logger
@@ -395,6 +397,7 @@ async def lifespan(app: FastAPI):
     await validate_mfa_configuration()
     await initialize_runtime_config(app)
     await migrate_legacy_webhook_config()
+    await migrate_legacy_image_config()
     request = Request(
         {
             'type': 'http',
@@ -818,6 +821,7 @@ app.include_router(openai.router, prefix='/openai', tags=['openai'])
 app.include_router(pipelines.router, prefix='/api/v1/pipelines', tags=['pipelines'])
 app.include_router(tasks.router, prefix='/api/v1/tasks', tags=['tasks'])
 app.include_router(images.router, prefix='/api/v1/images', tags=['images'])
+app.include_router(videos.router, prefix='/api/v1/videos', tags=['videos'])
 
 app.include_router(audio.router, prefix='/api/v1/audio', tags=['audio'])
 app.include_router(retrieval.router, prefix='/api/v1/retrieval', tags=['retrieval'])
@@ -2382,6 +2386,7 @@ async def get_app_config(request: Request):
         'code_execution.enable',
         'code_interpreter.enable',
         'image_generation.enable',
+        'video_generation.enable',
         'task.autocomplete.enable',
         'task.title.enable',
         'task.follow_up.enable',
@@ -2496,6 +2501,7 @@ async def get_app_config(request: Request):
                     'enable_code_execution': config.get('code_execution.enable'),
                     'enable_code_interpreter': config.get('code_interpreter.enable'),
                     'enable_image_generation': config.get('image_generation.enable'),
+                    'enable_video_generation': config.get('video_generation.enable'),
                     'enable_autocomplete_generation': config.get('task.autocomplete.enable'),
                     'enable_title_generation': config.get('task.title.enable'),
                     'enable_follow_up_generation': config.get('task.follow_up.enable'),

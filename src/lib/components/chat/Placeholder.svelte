@@ -66,6 +66,9 @@
 	export let showCommands = false;
 
 	export let imageGenerationEnabled = false;
+	export let selectedImageModelId = '';
+	export let videoGenerationEnabled = false;
+	export let selectedVideoModelId = '';
 	export let codeInterpreterEnabled = false;
 	export let webSearchEnabled = false;
 	export let toolApprovalMode = 'full';
@@ -150,6 +153,9 @@
 		bind:selectedSkillIds
 		bind:selectedFilterIds
 		bind:imageGenerationEnabled
+		bind:selectedImageModelId
+		bind:videoGenerationEnabled
+		bind:selectedVideoModelId
 		bind:codeInterpreterEnabled
 		bind:webSearchEnabled
 		bind:atSelectedModel
