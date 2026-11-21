@@ -130,7 +130,9 @@ ADMIN_CONFIG_KEYS = {
     'FOLDER_MAX_FILE_COUNT': 'folders.max_file_count',
     'AUTOMATION_MAX_COUNT': 'automations.max_count',
     'AUTOMATION_MIN_INTERVAL': 'automations.min_interval',
+    'AUTOMATION_MAX_CONCURRENT': 'automations.max_concurrent',
     'ENABLE_AUTOMATIONS': 'automations.enable',
+    'ENABLE_AUTOMATION_WEBHOOKS': 'automations.webhooks.enable',
     'ENABLE_CHANNELS': 'channels.enable',
     'ENABLE_COMMENTS': 'comments.enable',
     'ENABLE_NOTIFICATIONS': 'notifications.enable',
@@ -1183,7 +1185,9 @@ class AdminConfig(MfaConfigForm):
     FOLDER_MAX_FILE_COUNT: int | str | None = None
     AUTOMATION_MAX_COUNT: int | str | None = None
     AUTOMATION_MIN_INTERVAL: int | str | None = None
+    AUTOMATION_MAX_CONCURRENT: int | None = Field(default=None, gt=0)
     ENABLE_AUTOMATIONS: bool
+    ENABLE_AUTOMATION_WEBHOOKS: bool = True
     ENABLE_CHANNELS: bool
     ENABLE_COMMENTS: bool = False
     ENABLE_NOTIFICATIONS: bool = True
@@ -1266,6 +1270,8 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
     updates['automations.min_interval'] = (
         int(form_data.AUTOMATION_MIN_INTERVAL) if form_data.AUTOMATION_MIN_INTERVAL else ''
     )
+    if 'AUTOMATION_MAX_CONCURRENT' not in form_data.model_fields_set:
+        updates.pop('automations.max_concurrent', None)
 
     if form_data.DEFAULT_USER_ROLE not in ['pending', 'user', 'admin']:
         updates.pop('ui.default_user_role', None)
