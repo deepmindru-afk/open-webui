@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { resolveTerminalTarget } from '$lib/apis/terminal';
+	import { resolveTerminalTarget } from '$lib/apis/machines';
 	import type { TerminalContext } from '$lib/types';
 	import {
 		estimateTokens,
@@ -77,7 +77,7 @@
 		getCwd,
 		templatesApi,
 		uploadNewFileToTerminal
-	} from '$lib/apis/terminal';
+	} from '$lib/apis/machines';
 	import { isSavedChatId } from '$lib/utils/chatId';
 	import { generateAutoCompletion } from '$lib/apis';
 	import { deleteFileById } from '$lib/apis/files';
@@ -179,6 +179,9 @@
 	export let contextUsage = null;
 	export let contextCompactionEnabled = false;
 	export let embedded = false;
+	export let autofocus = true;
+	// Recorded audio goes to the host when given (note chats), otherwise it is attached to the message.
+	export let onRecordedAudio: ((file: File) => unknown) | null = null;
 	export let callActive = false;
 	export let callEnabled = true;
 
@@ -787,6 +790,8 @@
 
 	let loaded = false;
 	let recording = false;
+	let audioRecording = false;
+	let audioRecordingDisplayMedia = false;
 
 	let isComposing = false;
 	// Safari has a bug where compositionend is not triggered correctly #16615
@@ -1136,6 +1141,36 @@
 			}
 		}
 		return !files.some((item) => item.status === 'pending' && item.file instanceof File);
+	};
+
+	const recordedAudioHandler = async (file: File) => {
+		if (onRecordedAudio) await onRecordedAudio(file);
+		else await uploadFileHandler(file);
+	};
+
+	const recordActions = {
+		record: async () => {
+			try {
+				let stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+					toast.error(
+						$i18n.t(`Permission denied when accessing microphone: {{error}}`, { error: err })
+					);
+					return null;
+				});
+				if (stream) {
+					stream.getTracks().forEach((track) => track.stop());
+					audioRecordingDisplayMedia = false;
+					audioRecording = true;
+				}
+				stream = null;
+			} catch {
+				toast.error($i18n.t('Permission denied when accessing microphone'));
+			}
+		},
+		captureAudio: () => {
+			audioRecordingDisplayMedia = true;
+			audioRecording = true;
+		}
 	};
 
 	const uploadFileHandler = async (file, process = true, itemData = {}) => {
@@ -1725,6 +1760,7 @@
 							'fork',
 							'status',
 							'comments',
+							'record',
 							'side',
 							'model',
 							'compare',
@@ -1772,6 +1808,7 @@
 					onCompact: compactHandler,
 					onStatus: statusHandler,
 					onComments: openComments,
+					onRecord: () => recordActions.record(),
 					onSide: () => {
 						if (!canSide) return;
 						chatTabRequest.set({ parentChatId: chatId, prompt: '' });
@@ -1903,7 +1940,7 @@
 		loaded = true;
 
 		window.setTimeout(() => {
-			if (!$mobile && !$voiceCall) {
+			if (autofocus && !$mobile && !$voiceCall) {
 				const chatInput = document.getElementById(inputId);
 				chatInput?.focus();
 			}
@@ -2016,12 +2053,12 @@
 				<div class="relative">
 					{#if typingUsers.length > 0}
 						<div
-							class="absolute -top-7 inset-x-0 pointer-events-none select-none bg-linear-to-t from-white dark:from-base-900 to-transparent pb-2.5"
+							class="absolute -top-7 inset-x-0 pointer-events-none select-none bg-linear-to-t from-base-0 dark:from-base-900 to-transparent pb-2.5"
 						>
 							<div class="text-xs px-1 mt-1.5 flex items-center gap-1.5">
 								<Skeleton size="xs" />
 								<div class="min-w-0 truncate">
-									<span class="font-normal text-black dark:text-white">
+									<span class="font-normal text-base-1000 dark:text-base-0">
 										{typingUsers.map((user) => user.name).join(', ')}
 									</span>
 									{typingUsers.length === 1 ? $i18n.t('is typing...') : $i18n.t('are typing...')}
@@ -2035,7 +2072,7 @@
 						>
 							<button
 								aria-label={$i18n.t('Scroll to bottom')}
-								class=" bg-white border border-base-100 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto"
+								class=" bg-base-0 border border-base-100 dark:border-none dark:bg-base-0/20 p-1.5 rounded-full pointer-events-auto"
 								on:click={() => {
 									autoScroll = true;
 									scrollToBottom();
@@ -2085,36 +2122,56 @@
 						}}
 					/>
 
-					<div class={recording ? '' : 'hidden'}>
-						<VoiceRecording
-							confirmButtonId={inputId === 'chat-input'
-								? 'confirm-recording-button'
-								: `${inputId}-confirm-recording-button`}
-							bind:recording
-							onCancel={async () => {
-								recording = false;
+					<!-- pb-2 matches the form's gap-1.5 + mb-0.5 below the composer card. -->
+					<div class={recording || audioRecording ? 'pb-2' : 'hidden'}>
+						<div class={recording ? '' : 'hidden'}>
+							<VoiceRecording
+								confirmButtonId={inputId === 'chat-input'
+									? 'confirm-recording-button'
+									: `${inputId}-confirm-recording-button`}
+								bind:recording
+								onCancel={async () => {
+									recording = false;
 
-								await tick();
-								focus({ preventScroll: true });
-							}}
-							onConfirm={async (data) => {
-								const { text, filename } = data;
+									await tick();
+									focus({ preventScroll: true });
+								}}
+								onConfirm={async (data) => {
+									const { text, filename } = data;
 
-								recording = false;
+									recording = false;
 
-								await tick();
-								await insertTextAtCursor(`${text}`);
-								await tick();
-								focus({ preventScroll: true });
+									await tick();
+									await insertTextAtCursor(`${text}`);
+									await tick();
+									focus({ preventScroll: true });
 
-								if ($settings?.speechAutoSend ?? false) {
-									dispatch('submit', prompt);
-								}
-							}}
-						/>
+									if ($settings?.speechAutoSend ?? false) {
+										dispatch('submit', prompt);
+									}
+								}}
+							/>
+						</div>
+						{#if audioRecording}
+							<VoiceRecording
+								confirmButtonId={`${inputId}-confirm-audio-recording-button`}
+								bind:recording={audioRecording}
+								transcribe={false}
+								displayMedia={audioRecordingDisplayMedia}
+								echoCancellation={false}
+								noiseSuppression={false}
+								onCancel={() => {
+									audioRecording = false;
+								}}
+								onConfirm={async (data) => {
+									audioRecording = false;
+									if (data?.file) await recordedAudioHandler(data.file);
+								}}
+							/>
+						{/if}
 					</div>
 					<form
-						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
+						class="w-full flex flex-col gap-1.5 {recording || audioRecording ? 'hidden' : ''}"
 						on:submit|preventDefault={() => {
 							dispatch('submit', prompt);
 						}}
@@ -2159,7 +2216,7 @@
 						<!-- Queued messages display -->
 						{#if messageQueue.length > 0}
 							<div
-								class="mb-1 mx-2 py-0.5 px-1.5 rounded-2xl bg-white dark:bg-base-900/60 border border-base-100 dark:border-base-800/50 overflow-x-hidden overflow-y-auto max-h-[25vh]"
+								class="mb-1 mx-2 py-0.5 px-1.5 rounded-2xl bg-base-0 dark:bg-base-900/60 border border-base-100 dark:border-base-800/50 overflow-x-hidden overflow-y-auto max-h-[25vh]"
 							>
 								{#each messageQueue as queuedMessage (queuedMessage.id)}
 									<QueuedMessageItem
@@ -2176,7 +2233,7 @@
 						{/if}
 
 						{#if showStatusPanel}
-							<div class="mx-1 rounded-2xl bg-white text-xs dark:bg-base-900">
+							<div class="mx-1 rounded-2xl bg-base-0 text-xs dark:bg-base-900">
 								<div class="flex items-center justify-between px-3 py-1.5">
 									<div class="flex items-center gap-1.5 text-xs text-base-700 dark:text-base-300">
 										<span>{$i18n.t('Status')}</span>
@@ -2205,10 +2262,10 @@
 										</div>
 										{#if contextHasThreshold}
 											<div
-												class="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-100 dark:bg-white/8"
+												class="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-100 dark:bg-base-0/8"
 											>
 												<div
-													class="h-full rounded-full bg-base-300 dark:bg-white/20"
+													class="h-full rounded-full bg-base-300 dark:bg-base-0/20"
 													style={`width: ${contextBarPercent}%`}
 												></div>
 											</div>
@@ -2261,7 +2318,7 @@
 								: ' border-base-200/60 dark:border-base-800/40'} {($settings?.highContrastMode ??
 							false)
 								? 'focus-within:outline focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-blue-500 [&_.ProseMirror:focus-visible]:outline-none!'
-								: ''}  transition px-0.5 bg-white/80 dark:bg-[oklch(0.24_0_0)]/90 backdrop-blur-md dark:text-base-100"
+								: ''}  transition px-0.5 bg-base-0/80 dark:bg-[color-mix(in_oklab,var(--color-base-850)_55%,var(--color-base-900))]/90 backdrop-blur-md dark:text-base-100"
 							dir={$settings?.chatDirection ?? 'auto'}
 						>
 							{#if atSelectedModel !== undefined}
@@ -2337,7 +2394,7 @@
 												</div>
 												<div class=" absolute -top-1 -right-1">
 													<button
-														class=" bg-white text-black border border-white rounded-full {($settings?.highContrastMode ??
+														class=" bg-base-0 text-base-1000 border border-base-0 rounded-full {($settings?.highContrastMode ??
 														false)
 															? ''
 															: 'hover-reveal transition'}"
@@ -2426,6 +2483,7 @@
 													json={true}
 													richText={$settings?.richTextInput ?? true}
 													messageInput={true}
+													{autofocus}
 													followUpSuggestion={!generating &&
 													history?.messages?.[history?.currentId]?.role === 'assistant' &&
 													history?.messages?.[history?.currentId]?.done
@@ -2614,6 +2672,7 @@
 										{visionCapableModels}
 										{toolApprovalMode}
 										{onToolApprovalModeChange}
+										{recordActions}
 										{screenCaptureHandler}
 										{inputFilesHandler}
 										uploadFilesHandler={() => {
@@ -2667,7 +2726,7 @@
 										<button
 											type="button"
 											id="input-menu-button"
-											class="bg-transparent hover:bg-base-100/40 text-base-700 dark:text-white dark:hover:bg-base-800/40 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+											class="bg-transparent hover:bg-base-100/40 text-base-700 dark:text-base-0 dark:hover:bg-base-800/40 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 											aria-label={$i18n.t('More')}
 										>
 											<PlusAlt className="size-5" />
@@ -2741,7 +2800,7 @@
 											<button
 												type="button"
 												id="chat-variables-button"
-												class="bg-transparent hover:bg-base-100 text-base-700 dark:text-white dark:hover:bg-base-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+												class="bg-transparent hover:bg-base-100 text-base-700 dark:text-base-0 dark:hover:bg-base-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 												aria-label={$i18n.t('Chat Variables')}
 												on:click={() => {
 													dispatch('chatVariables');
@@ -2764,7 +2823,7 @@
 													type="button"
 													id="model-valves-button"
 													aria-label={$i18n.t('Valves')}
-													class="bg-transparent hover:bg-base-100 text-base-700 dark:text-white dark:hover:bg-base-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden"
+													class="bg-transparent hover:bg-base-100 text-base-700 dark:text-base-0 dark:hover:bg-base-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden"
 													on:click={() => {
 														selectedValvesType = 'function';
 														selectedValvesItemId = selectedModelIds[0]?.split('.')[0];
@@ -3033,7 +3092,7 @@
 											<Tooltip content={$i18n.t('Stop')}>
 												<button
 													aria-label={$i18n.t('Stop')}
-													class="bg-white hover:bg-base-100 text-base-800 dark:bg-base-700 dark:text-white dark:hover:bg-base-800 transition rounded-full p-[0.3125rem]"
+													class="bg-base-0 hover:bg-base-100 text-base-800 dark:bg-base-700 dark:text-base-0 dark:hover:bg-base-800 transition rounded-full p-[0.3125rem]"
 													on:click={() => {
 														stopResponse();
 													}}
@@ -3105,7 +3164,7 @@
 													content={callActive ? $i18n.t('Call in progress') : $i18n.t('Voice mode')}
 												>
 													<button
-														class=" bg-black text-white hover:bg-base-900 dark:bg-white dark:text-black dark:hover:bg-base-100 transition rounded-full p-[0.3125rem] self-center"
+														class=" bg-base-1000 text-base-0 hover:bg-base-900 dark:bg-base-0 dark:text-base-1000 dark:hover:bg-base-100 transition rounded-full p-[0.3125rem] self-center"
 														class:call-active={callActive}
 														type="button"
 														on:click={async () => {
@@ -3180,8 +3239,8 @@
 															: `${inputId}-send-message-button`}
 														aria-label={$i18n.t('Send message')}
 														class="{!(prompt === '' && files.length === 0)
-															? 'bg-black text-white hover:bg-base-900 dark:bg-white dark:text-black dark:hover:bg-base-100 '
-															: 'text-white bg-base-200 dark:text-base-900 dark:bg-base-700 disabled'} transition rounded-full p-[0.3125rem] self-center"
+															? 'bg-base-1000 text-base-0 hover:bg-base-900 dark:bg-base-0 dark:text-base-1000 dark:hover:bg-base-100 '
+															: 'text-base-0 bg-base-200 dark:text-base-900 dark:bg-base-700 disabled'} transition rounded-full p-[0.3125rem] self-center"
 														type="submit"
 														disabled={prompt === '' && files.length === 0}
 													>

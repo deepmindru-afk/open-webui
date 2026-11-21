@@ -26,7 +26,7 @@
 		getTerminalServers,
 		resolveTerminalTarget,
 		type TerminalTarget
-	} from '$lib/apis/terminal';
+	} from '$lib/apis/machines';
 	import { terminalServers } from '$lib/stores';
 	import TerminalSystemInfoModal from './TerminalSystemInfoModal.svelte';
 	import Activity from '$lib/components/icons/Activity.svelte';
@@ -60,11 +60,11 @@
 	);
 
 	const inputClass =
-		'h-7 w-full rounded-lg border border-base-100/50 bg-base-50/40 px-2 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
+		'h-7 w-full rounded-lg border border-base-100/50 bg-base-50/40 px-2 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-base-0/[0.04] dark:bg-base-0/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
 	const textareaClass =
-		'w-full resize-y rounded-lg border border-base-100/50 bg-base-50/40 px-2 py-1.5 font-mono text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
+		'w-full resize-y rounded-lg border border-base-100/50 bg-base-50/40 px-2 py-1.5 font-mono text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-base-0/[0.04] dark:bg-base-0/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
 	const actionButtonClass =
-		'text-xs text-base-500 transition-colors hover:text-base-900 dark:text-base-500 dark:hover:text-white';
+		'text-xs text-base-500 transition-colors hover:text-base-900 dark:text-base-500 dark:hover:text-base-0';
 	const item =
 		'select-none flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] hover:bg-base-50/40 dark:hover:bg-base-800/40 transition';
 
@@ -265,7 +265,7 @@
 
 	function instanceName(instance: any) {
 		const kind = (instance.context_id ?? '').split(':')[0];
-		if (kind === 'default') return name || $i18n.t('Terminal');
+		if (kind === 'default') return name || $i18n.t('Machine');
 		if (kind === 'chat') return instance.label ?? $i18n.t('Deleted chat');
 		if (kind === 'user') return instance.label ?? $i18n.t('Deleted user');
 		return instance.label ?? instance.context_id;
@@ -340,7 +340,7 @@
 			$i18n.t('Delete {{name}}?', { name }),
 			instances.length
 				? $i18n.t('This deletes {{count}} instances and their files.', { count: instances.length })
-				: $i18n.t('This terminal is deleted.'),
+				: $i18n.t('This machine is deleted.'),
 			$i18n.t('Delete'),
 			() =>
 				run(async () => {
@@ -359,12 +359,12 @@
 <Modal
 	bind:show
 	size="sm"
-	ariaLabel={terminalId ? $i18n.t('Terminal settings') : $i18n.t('New terminal')}
+	ariaLabel={terminalId ? $i18n.t('Machine settings') : $i18n.t('New machine')}
 >
 	<div class="text-base-900 dark:text-base-100">
 		<div class="flex items-center justify-between gap-2 px-5 pb-2 pt-4">
 			<h2 class="font-primary min-w-0 truncate text-sm font-medium">
-				{terminalId ? name || $i18n.t('Terminal settings') : $i18n.t('New terminal')}
+				{terminalId ? name || $i18n.t('Machine settings') : $i18n.t('New machine')}
 			</h2>
 			<div class="flex shrink-0 items-center gap-2">
 				{#if terminalId && !loading}
@@ -401,7 +401,7 @@
 							id="terminal-name"
 							class={inputClass}
 							bind:value={name}
-							placeholder={$i18n.t('My terminal')}
+							placeholder={$i18n.t('My machine')}
 							required
 						/>
 					</UserSettingField>
@@ -409,7 +409,7 @@
 					{#if !terminalId && connections.length > 1}
 						<UserSettingRow
 							label={$i18n.t('Server')}
-							description={$i18n.t('Choose the server that runs this terminal.')}
+							description={$i18n.t('Choose the server that runs this machine.')}
 						>
 							<SettingsSelect bind:value={connectionId} ariaLabel={$i18n.t('Server')}>
 								{#each connections as connection}
@@ -442,7 +442,7 @@
 									bind:value={scope}
 									ariaLabel={$i18n.t('Separate instance per')}
 									disabled={scopeLocked || busy}
-									selectClassName="!h-4 cursor-pointer !rounded-none !border-0 !bg-transparent !ps-0 !pe-6 !outline-none focus-visible:text-base-900 dark:!bg-transparent dark:focus-visible:text-white"
+									selectClassName="!h-4 cursor-pointer !rounded-none !border-0 !bg-transparent !ps-0 !pe-6 !outline-none focus-visible:text-base-900 dark:!bg-transparent dark:focus-visible:text-base-0"
 								>
 									{#each scopes as option}
 										<option value={option.value}>{$i18n.t(option.label)}</option>
@@ -522,7 +522,7 @@
 								className="sm:col-span-2"
 								label={$i18n.t('Image')}
 								forId="terminal-image"
-								description={$i18n.t('Container image used to run the terminal.')}
+								description={$i18n.t('Container image used to run the machine.')}
 							>
 								<input
 									id="terminal-image"
@@ -625,7 +625,7 @@
 									<button
 										type="button"
 										aria-label={$i18n.t('Add variable')}
-										class="text-base-500 hover:text-base-900 dark:hover:text-white"
+										class="text-base-500 hover:text-base-900 dark:hover:text-base-0"
 										on:click={() => (env = [...env, { key: '', value: '' }])}
 										><Plus className="size-3.5" /></button
 									>
@@ -647,7 +647,7 @@
 										<button
 											type="button"
 											aria-label={$i18n.t('Remove variable')}
-											class="shrink-0 text-base-400 hover:text-base-900 dark:hover:text-white"
+											class="shrink-0 text-base-400 hover:text-base-900 dark:hover:text-base-0"
 											on:click={() => (env = env.filter((_, i) => i !== index))}
 											><XMark className="size-3.5" /></button
 										>
@@ -743,7 +743,7 @@
 								</div>
 							{:else}
 								<div class="text-xs text-base-400 dark:text-base-600">
-									{$i18n.t('No instances yet. One starts the first time the terminal is used.')}
+									{$i18n.t('No instances yet. One starts the first time the machine is used.')}
 								</div>
 							{/each}
 						</div>
@@ -757,13 +757,13 @@
 								type="button"
 								class={actionButtonClass}
 								disabled={busy}
-								on:click={deleteTerminal}>{$i18n.t('Delete terminal')}</button
+								on:click={deleteTerminal}>{$i18n.t('Delete machine')}</button
 							>
 						{/if}
 					</div>
 					<button
 						type="submit"
-						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0"
 						disabled={busy || invalid || (!terminalId && !connectionId)}
 					>
 						{terminalId ? $i18n.t('Save') : $i18n.t('Create')}
@@ -791,7 +791,7 @@
 				</button>
 			</div>
 
-			<div class="w-full px-5 pb-4 dark:text-white" inert={busy} aria-busy={busy}>
+			<div class="w-full px-5 pb-4 dark:text-base-0" inert={busy} aria-busy={busy}>
 				<AccessControl
 					bind:accessGrants
 					labels={{ private: $i18n.t('Restricted') }}
@@ -801,7 +801,7 @@
 					shareOpen={false}
 				>
 					<p class="text-xs text-base-500 dark:text-base-400">
-						{$i18n.t('People with access can run commands and see every file on this terminal.')}
+						{$i18n.t('People with access can run commands and see every file on this machine.')}
 					</p>
 				</AccessControl>
 			</div>

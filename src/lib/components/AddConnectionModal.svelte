@@ -304,6 +304,12 @@
 		init();
 	}
 
+	const handleUrlInput = () => {
+		if (!ollama && url.includes('api.openai.com')) {
+			apiType = 'responses';
+		}
+	};
+
 	$: azure =
 		provider === 'azure' ||
 		((url.includes('azure.') || url.includes('cognitive.microsoft.com')) &&
@@ -386,6 +392,7 @@
 										class={`w-full text-sm ${inputClass}`}
 										type="text"
 										bind:value={url}
+										on:input={handleUrlInput}
 										placeholder={$i18n.t('API Base URL')}
 										autocomplete="off"
 										list={ollama ? undefined : 'suggestions'}
@@ -830,7 +837,7 @@
 						</div>
 
 						<button
-							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white disabled:cursor-not-allowed"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0 disabled:cursor-not-allowed"
 							type="submit"
 							disabled={loading}
 						>

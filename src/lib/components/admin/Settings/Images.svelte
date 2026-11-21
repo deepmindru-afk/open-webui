@@ -40,6 +40,7 @@
 	let videoConfig: any = null;
 	let videoSavedConfig: any = null;
 
+	// Settings search reads these keys from the locale file, which i18n:parse cannot see: $i18n.t('settings.admin.images.title')
 	$: settingLabels = {
 		ENABLE_VIDEO_GENERATION: $i18n.t('settings.admin.videos.videoGeneration.label'),
 		VIDEO_GENERATION_DEFAULT_MODEL: $i18n.t('settings.admin.videos.defaultVideoModel.label'),
@@ -133,7 +134,7 @@
 />
 
 <form class="flex h-full flex-col justify-between text-sm" on:submit|preventDefault={saveHandler}>
-	<h2 class="text-sm font-medium text-base-900 dark:text-white mb-4">
+	<h2 class="text-sm font-medium text-base-900 dark:text-base-0 mb-4">
 		{$i18n.t('Images & Videos')}
 	</h2>
 
@@ -167,7 +168,7 @@
 								<Tooltip content={$i18n.t('settings.admin.images.addConnection.label')}>
 									<button
 										aria-label={$i18n.t('settings.admin.images.addConnection.label')}
-										class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-black/5 hover:text-base-700 dark:text-base-600 dark:hover:bg-white/5 dark:hover:text-base-300"
+										class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-base-1000/5 hover:text-base-700 dark:text-base-600 dark:hover:bg-base-0/5 dark:hover:text-base-300"
 										on:click={() => {
 											showAddConnectionModal = true;
 										}}

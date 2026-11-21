@@ -91,6 +91,16 @@
 		floatingInput = false;
 		floatingInputValue = '';
 	};
+
+	const paintSelection = (range: Range | null) => {
+		const highlights = (window.CSS as any)?.highlights;
+		const HighlightClass = (window as any).Highlight;
+		if (!highlights || !HighlightClass) return;
+		if (range) highlights.set('floating-selection', new HighlightClass(range));
+		else highlights.delete('floating-selection');
+	};
+
+	$: paintSelection(floatingInput ? range : null);
 </script>
 
 <div
@@ -102,7 +112,7 @@
 >
 	{#if !floatingInput}
 		<div
-			class="flex flex-row flex-wrap shrink-0 p-0.5 bg-white dark:bg-base-850 dark:text-base-100 text-medium rounded-xl shadow-xl border border-base-100 dark:border-base-800"
+			class="flex flex-row flex-wrap shrink-0 p-0.5 bg-base-0 dark:bg-base-850 dark:text-base-100 text-medium rounded-xl shadow-xl border border-base-100 dark:border-base-800"
 		>
 			{#each displayActions as action}
 				<button
@@ -144,7 +154,7 @@
 		</div>
 	{:else}
 		<div
-			class="py-1 flex dark:text-base-100 bg-white dark:bg-base-850 border border-base-100 dark:border-base-800 w-72 max-w-full rounded-full shadow-xl"
+			class="py-1 flex dark:text-base-100 bg-base-0 dark:bg-base-850 border border-base-100 dark:border-base-800 w-72 max-w-full rounded-full shadow-xl"
 		>
 			<input
 				type="text"
@@ -164,8 +174,8 @@
 				<button
 					aria-label={$i18n.t('Submit question')}
 					class="{floatingInputValue !== ''
-						? 'bg-black text-white hover:bg-base-900 dark:bg-white dark:text-black dark:hover:bg-base-100 '
-						: 'text-white bg-base-200 dark:text-base-900 dark:bg-base-700 disabled'} transition rounded-full p-1.5 m-0.5 self-center"
+						? 'bg-base-1000 text-base-0 hover:bg-base-900 dark:bg-base-0 dark:text-base-1000 dark:hover:bg-base-100 '
+						: 'text-base-0 bg-base-200 dark:text-base-900 dark:bg-base-700 disabled'} transition rounded-full p-1.5 m-0.5 self-center"
 					on:click={() => {
 						actionHandler(selectedAction?.id);
 					}}
@@ -187,3 +197,9 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	:global(::highlight(floating-selection)) {
+		background-color: #fbbf2466;
+	}
+</style>

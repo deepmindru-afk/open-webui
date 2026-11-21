@@ -75,7 +75,8 @@
 		TOOL_SEARCH_DECISIONS_PROMPT: '',
 		TOOL_SEARCH_DEFER_THRESHOLD: 400,
 		TOOL_SEARCH_ALWAYS_LOADED: [] as string[],
-		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: true
+		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: true,
+		TOOL_SEARCH_LIST_TOOLS: true
 	};
 	let toolSearchAlwaysLoaded = '';
 	let defaultDecisionsPrompt = '';
@@ -164,6 +165,7 @@
 		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: $i18n.t(
 			'settings.admin.interface.toolSearchDeferBuiltinTools.label'
 		),
+		TOOL_SEARCH_LIST_TOOLS: $i18n.t('settings.admin.interface.toolSearchListTools.label'),
 		TOOL_SEARCH_DEFER_THRESHOLD: $i18n.t('settings.admin.interface.toolSearchThreshold.label'),
 		TOOL_SEARCH_ALWAYS_LOADED: $i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.label'),
 		VISUALIZATION_PROMPT_TEMPLATE: $i18n.t('settings.admin.interface.visualizationPrompt.label'),
@@ -293,9 +295,9 @@
 		return model.id;
 	};
 	const inputClass =
-		'w-full h-7 rounded-lg border border-base-100/50 bg-base-50/40 px-2 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
+		'w-full h-7 rounded-lg border border-base-100/50 bg-base-50/40 px-2 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-base-0/[0.04] dark:bg-base-0/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
 	const textareaClass =
-		'w-full rounded-lg border border-base-100/50 bg-base-50/40 px-2 py-1.5 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
+		'w-full rounded-lg border border-base-100/50 bg-base-50/40 px-2 py-1.5 text-xs text-base-700 outline-hidden transition-colors placeholder:text-base-300 focus:border-blue-400 dark:border-base-0/[0.04] dark:bg-base-0/[0.03] dark:text-base-300 dark:placeholder:text-base-700 dark:focus:border-blue-500';
 
 	const init = async () => {
 		try {
@@ -354,7 +356,7 @@
 			updateInterfaceHandler();
 		}}
 	>
-		<h2 class="text-sm font-medium text-base-900 dark:text-white mb-4">
+		<h2 class="text-sm font-medium text-base-900 dark:text-base-0 mb-4">
 			{$i18n.t('settings.admin.interface.title')}
 		</h2>
 
@@ -804,6 +806,14 @@
 							bind:state={chatConfig.TOOL_SEARCH_DEFER_BUILTIN_TOOLS}
 							ariaLabelledbyId={labelId}
 						/>
+					</AdminSettingRow>
+
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolSearchListTools.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchListTools.description')}
+						let:labelId
+					>
+						<Switch bind:state={chatConfig.TOOL_SEARCH_LIST_TOOLS} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 
 					<AdminSettingRow

@@ -39,6 +39,9 @@
 
 	let inputElement = null;
 
+	// Earlier wording, kept so i18n:parse does not drop its translations:
+	// $i18n.t('MCP support is experimental and its specification changes often, which can lead to incompatibilities. OpenAPI specification support is directly maintained by the Open WebUI team, making it the more reliable option for compatibility.')
+	// $i18n.t('Read more →')
 	let type = 'openapi'; // 'openapi', 'mcp'
 
 	let url = '';
@@ -863,7 +866,6 @@
 								on:click={() => {
 									showAccessControlModal = true;
 								}}
-								label={$i18n.t('Access Control')}
 							/>
 						</div>
 
@@ -1043,26 +1045,6 @@
 						</div>
 					</div>
 
-					{#if type === 'mcp'}
-						<div
-							class=" bg-yellow-500/20 text-yellow-700 dark:text-yellow-200 rounded-2xl text-xs px-4 py-3 mb-2 mt-1"
-						>
-							<span class="font-normal">
-								{$i18n.t('Warning')}:
-							</span>
-							<!-- LICENSE covers this Open WebUI wordmark.
-							Do not alter, remove, obscure, or replace it except as LICENSE permits:
-							https://docs.openwebui.com/license. -->
-							{$i18n.t(
-								'MCP support is experimental and its specification changes often, which can lead to incompatibilities. OpenAPI specification support is directly maintained by the Open WebUI team, making it the more reliable option for compatibility.'
-							)}
-
-							<a class="font-normal underline" href="https://docs.openwebui.com/" target="_blank"
-								>{$i18n.t('Read more →')}</a
-							>
-						</div>
-					{/if}
-
 					<div class="flex justify-between items-center pt-3 text-xs">
 						<div>
 							{#if edit}
@@ -1079,7 +1061,7 @@
 						</div>
 
 						<button
-							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white disabled:cursor-not-allowed"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0 disabled:cursor-not-allowed"
 							type="submit"
 							disabled={loading}
 						>

@@ -9,8 +9,8 @@
 		type TerminalTarget,
 		type TerminalProcess,
 		type TerminalProcessOutput
-	} from '$lib/apis/terminal';
-	import { readTerminalStream } from '$lib/apis/terminal/socket';
+	} from '$lib/apis/machines';
+	import { readTerminalStream } from '$lib/apis/machines/socket';
 	import XTerminal from './XTerminal.svelte';
 	import Icon from './FileNav/Icon.svelte';
 
@@ -216,7 +216,7 @@
 
 <div class="terminal-dock min-h-0">
 	<div
-		class="flex h-7 min-w-0 items-center border-black/5 text-[11px] text-base-500 dark:border-white/5 dark:text-base-400"
+		class="flex h-7 min-w-0 items-center border-base-1000/5 text-[11px] text-base-500 dark:border-base-0/5 dark:text-base-400"
 		class:border-b={expanded}
 	>
 		{#if !expanded}
@@ -329,7 +329,7 @@
 		color: var(--color-base-900, #171717);
 	}
 	:global(.dark) .terminal-tab.selected {
-		color: #e5e5e5;
+		color: var(--color-base-200);
 	}
 	.tab-button,
 	.tab-close {
@@ -346,7 +346,7 @@
 	}
 	:global(.dark) .tab-button:hover,
 	:global(.dark) .tab-close:hover {
-		color: #f5f5f5;
+		color: var(--color-base-100);
 	}
 	.tab-close {
 		opacity: 0;

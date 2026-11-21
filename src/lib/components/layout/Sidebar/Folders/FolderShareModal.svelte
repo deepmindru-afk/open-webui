@@ -95,7 +95,7 @@
 			</button>
 		</div>
 
-		<div class="w-full px-5 pb-4 dark:text-white" inert={loading} aria-busy={loading}>
+		<div class="w-full px-5 pb-4 dark:text-base-0" inert={loading} aria-busy={loading}>
 			<AccessControl
 				bind:accessGrants
 				labels={{
@@ -119,7 +119,7 @@
 				<label class="flex w-full items-center justify-between mt-3 mb-1 text-xs">
 					<span>{$i18n.t('Sharing mode')}</span>
 					<select
-						class="bg-transparent text-xs outline-none"
+						class="bg-transparent text-xs outline-none pr-5"
 						bind:value={shareMode}
 						disabled={loading}
 						on:change={handleAccessChange}

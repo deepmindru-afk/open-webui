@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { resolveTerminalTarget } from '$lib/apis/terminal';
+	import { resolveTerminalTarget } from '$lib/apis/machines';
 	// Keep keys in nested template expressions visible to i18next-parser.
 	// $i18n.t("Terminal unavailable");
 	// $i18n.t("No preview available");
@@ -15,7 +15,7 @@
 		showFileNavPath,
 		terminalServers
 	} from '$lib/stores';
-	import { downloadFileBlob, downloadFilePreview, readFile } from '$lib/apis/terminal';
+	import { downloadFileBlob, downloadFilePreview, readFile } from '$lib/apis/machines';
 	import { getFileContentById } from '$lib/apis/files';
 	import FilePreview from '$lib/components/chat/FileNav/FilePreview.svelte';
 	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
@@ -230,10 +230,10 @@
 </script>
 
 <div
-	class="my-2 w-full overflow-hidden rounded-xl border border-base-200 bg-white dark:border-white/8 dark:bg-base-950/20"
+	class="my-2 w-full overflow-hidden rounded-xl border border-base-200 bg-base-0 dark:border-base-0/8 dark:bg-base-950/20"
 >
 	<div
-		class="flex h-8 items-center {expanded ? 'border-b border-base-100 dark:border-white/8' : ''}"
+		class="flex h-8 items-center {expanded ? 'border-b border-base-100 dark:border-base-0/8' : ''}"
 	>
 		<button
 			type="button"
@@ -276,7 +276,7 @@
 	{#if expanded}
 		{#if unavailable}
 			<div class="px-4 py-3 text-xs text-base-500 dark:text-base-400">
-				{t('Terminal unavailable')}
+				{t('Machine unavailable')}
 			</div>
 		{:else if error}
 			<div class="px-4 py-3 text-xs text-red-500 dark:text-red-400">{error}</div>

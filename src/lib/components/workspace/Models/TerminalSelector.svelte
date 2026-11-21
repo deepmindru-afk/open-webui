@@ -4,7 +4,7 @@
 	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
 	import Check from '$lib/components/icons/Check.svelte';
 	import ModelSettingsLabel from './ModelSettingsLabel.svelte';
-	import { getTerminalServers, type TerminalServer } from '$lib/apis/terminal';
+	import { getTerminalServers, type TerminalServer } from '$lib/apis/machines';
 
 	const i18n = getContext<any>('i18n');
 
@@ -49,9 +49,9 @@
 		>
 			<span class="text-base-600 dark:text-base-400"
 				><ModelSettingsLabel
-					label={label || $i18n.t('Default terminal')}
+					label={label || $i18n.t('Default machine')}
 					description={description ||
-						$i18n.t('Choose the terminal server selected by default for chats with this model.')}
+						$i18n.t('Choose the machine selected by default for chats with this model.')}
 				/></span
 			>
 			<span bind:this={valueElement} class="min-w-0 truncate text-base-900 dark:text-base-100"
@@ -62,7 +62,7 @@
 
 		<div slot="content">
 			<div
-				class="flex max-h-64 w-56 max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-y-auto rounded-xl border border-base-200 bg-white p-1 text-base-900 shadow-lg dark:border-base-800 dark:bg-base-850 dark:text-base-100"
+				class="flex max-h-64 w-56 max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-y-auto rounded-xl border border-base-200 bg-base-0 p-1 text-base-900 shadow-lg dark:border-base-800 dark:bg-base-850 dark:text-base-100"
 			>
 				{#each items as item (item.value)}
 					<button
@@ -86,13 +86,12 @@
 	>
 		<span class="text-base-600 dark:text-base-400"
 			><ModelSettingsLabel
-				label={label || $i18n.t('Default terminal')}
+				label={label || $i18n.t('Default machine')}
 				description={description ||
-					$i18n.t('Choose the terminal server selected by default for chats with this model.')}
+					$i18n.t('Choose the machine selected by default for chats with this model.')}
 			/></span
 		>
-		<span class="truncate text-base-500 dark:text-base-400"
-			>{$i18n.t('No terminal servers available')}</span
+		<span class="truncate text-base-500 dark:text-base-400">{$i18n.t('No machines available')}</span
 		>
 	</div>
 {/if}

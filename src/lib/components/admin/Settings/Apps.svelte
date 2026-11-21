@@ -76,7 +76,7 @@
 				><button
 					type="button"
 					aria-label={$i18n.t('Add app')}
-					class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-black/5 hover:text-base-900 dark:text-base-600 dark:hover:bg-white/5 dark:hover:text-white"
+					class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-base-1000/5 hover:text-base-900 dark:text-base-600 dark:hover:bg-base-0/5 dark:hover:text-base-0"
 					on:click={() => configure(null)}><Plus /></button
 				></Tooltip
 			>
@@ -99,11 +99,12 @@
 									className="size-4 shrink-0 rounded!"
 								/>
 							{:else}<Grid className="size-4 shrink-0" strokeWidth="1.5" />{/if}
-							<label
-								for={`app-${app.id}-control`}
-								class="truncate text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 group-focus-within/setting-row:text-base-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white group-has-[button[id$=-control]:enabled]/setting-row:cursor-pointer group-has-[button[id$=-control]:disabled]/setting-row:cursor-not-allowed"
+							<button
+								type="button"
+								on:click={() => configure(app)}
+								class="min-w-0 truncate text-left cursor-pointer text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 group-focus-within/setting-row:text-base-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white"
 								>{app.name}
-								<span class="text-base-400 dark:text-base-600">{app.slug}</span></label
+								<span class="text-base-400 dark:text-base-600">{app.slug}</span></button
 							>
 						</div>
 						{#if app.is_active}

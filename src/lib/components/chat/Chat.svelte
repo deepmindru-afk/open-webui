@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getTerminalServers } from '$lib/apis/terminal';
+	import { getTerminalServers } from '$lib/apis/machines';
 	import { resolveToolApprovalMode } from '$lib/utils/toolPermissions';
 	import type { AppLayoutContext, TerminalContext } from '$lib/types';
 	import { setChatContext } from './context';
@@ -127,7 +127,7 @@
 		resolveTerminalTarget,
 		setCwd,
 		type FilesystemFile
-	} from '$lib/apis/terminal';
+	} from '$lib/apis/machines';
 	import { generateOpenAIChatCompletion, getErrorMessage } from '$lib/apis/openai';
 	import { processUrl, processWebSearch } from '$lib/apis/retrieval';
 	import {
@@ -173,6 +173,7 @@
 	import Sidebar from '../icons/Sidebar.svelte';
 	import Image from '../common/Image.svelte';
 	import XMark from '../icons/XMark.svelte';
+	import ChevronDown from '../icons/ChevronDown.svelte';
 	import EmbeddedChatHistoryDropdown from './EmbeddedChatHistoryDropdown.svelte';
 	import ChatMenu from '$lib/components/layout/Navbar/Menu.svelte';
 	import ShareChatModal from './ShareChatModal.svelte';
@@ -239,6 +240,12 @@
 	export let onBeforeNoteSubmit: (() => Promise<void>) | null = null;
 	export let onInsertToNote: ((content: string) => void) | null = null;
 	export let onCloseEmbedded: (() => void) | null = null;
+	// Collapsed embedded chats render only the composer; the host expands them on demand.
+	export let embeddedCollapsed = false;
+	export let onCollapseEmbedded: (() => void) | null = null;
+	// Pads the header and messages when the host draws the composer flush to its frame.
+	export let embeddedInset = false;
+	export let onRecordedAudio: ((file: File) => unknown) | null = null;
 	export let onNewEmbeddedChat: (() => void | Promise<void>) | null = null;
 	export let onCreateEmbeddedChat:
 		| ((chat: {
@@ -4182,11 +4189,11 @@
 			(item, index, array) => array.findIndex((i) => equal(i, item)) === index
 		);
 
-		const runningReply = history.currentId ? history.messages[history.currentId] : null;
+		const lastMessage = history.currentId ? history.messages[history.currentId] : null;
 		const queued =
 			!bridgeRequest &&
-			runningReply?.role === 'assistant' &&
-			runningReply.done === false &&
+			lastMessage?.role === 'assistant' &&
+			(lastMessage.done === false || backendQueue.length > 0) &&
 			usesBackendQueue(_files);
 
 		// Create user message
@@ -4530,12 +4537,10 @@
 			localStorage.token,
 			{ chatId: id, modelId: selectedModels[0] ?? null }
 		);
-		if (!target) throw new Error($i18n.t('Terminal Not Found'));
+		if (!target) throw new Error($i18n.t('Machine Not Found'));
 		const result = await setCwd(target, context.currentDirectory);
 		if (!result?.cwd)
-			throw new Error(
-				$i18n.t('Working directory is unavailable. Check the terminal connection and path.')
-			);
+			throw new Error($i18n.t('Working directory is unavailable. Check the machine and path.'));
 		initializedTerminalChatId = id;
 	};
 
@@ -5217,6 +5222,7 @@
 				id: responseMessageId,
 				...(messageIdsList ? { message_ids: messageIdsList } : {}),
 				parent_id: userMessage?.parentId ?? null,
+				...(userMessage?.meta?.status === 'pending' ? { queue: true } : {}),
 				// Whether a message is queued is the backend's call, not a status the browser sends.
 				user_message:
 					userMessage?.meta?.status === 'pending'
@@ -5909,7 +5915,7 @@
 		<button
 			type="button"
 			class="flex shrink-0 cursor-pointer items-center justify-center {tabbed || fullWidthTabs
-				? 'size-4 rounded text-base-400 hover:bg-base-200 hover:text-base-700 dark:hover:bg-white/10 dark:hover:text-white'
+				? 'size-4 rounded text-base-400 hover:bg-base-200 hover:text-base-700 dark:hover:bg-base-0/10 dark:hover:text-base-0'
 				: 'size-6 rounded-lg text-base-500 transition hover:bg-base-50/40 hover:text-base-700 dark:text-base-400 dark:hover:bg-base-800/40 dark:hover:text-base-200'}"
 			id={embedded ? undefined : 'chat-context-menu-button'}
 			aria-label={$i18n.t('Chat actions')}
@@ -6143,7 +6149,7 @@
 				style="background-image: url({backgroundImage})"
 			/>
 			<div
-				class="pointer-events-none absolute top-0 left-0 w-full h-full bg-linear-to-t from-white/90 to-white/55 dark:from-base-900/90 dark:to-base-900/65 z-0"
+				class="pointer-events-none absolute top-0 left-0 w-full h-full bg-linear-to-t from-base-0/90 to-base-0/55 dark:from-base-900/90 dark:to-base-900/65 z-0"
 			></div>
 		{/if}
 
@@ -6162,16 +6168,18 @@
 				aria-labelledby={fullWidthTabs ? 'chat-panel-main-chat' : undefined}
 			>
 				{#if loading}
-					{#if !fullWidthTabs}
+					{#if !fullWidthTabs && !embeddedCollapsed}
 						<div class="flex items-center justify-center h-full w-full">
 							<Spinner className="size-5" />
 						</div>
 					{/if}
 				{:else}
 					<FilesOverlay show={dragged} />
-					{#if embedded && !tabbed}
+					{#if embedded && !tabbed && !embeddedCollapsed}
 						<div
-							class="h-8 shrink-0 flex items-center justify-between gap-2 border-b border-base-50/80 px-3 pb-1 text-base-700 dark:border-base-850/40 dark:text-base-200"
+							class="h-8 shrink-0 flex items-center justify-between gap-2 border-b border-base-50/80 pb-1 text-base-700 dark:border-base-850/40 dark:text-base-200 {embeddedInset
+								? 'px-4'
+								: 'px-3'}"
 						>
 							<div class="flex min-w-0 items-center gap-2">
 								<EmbeddedChatHistoryDropdown
@@ -6185,10 +6193,20 @@
 									onDeleteChat={onDeleteEmbeddedChat}
 								/>
 							</div>
+							{#if onCollapseEmbedded}<Tooltip content={$i18n.t('Collapse')} placement="bottom">
+									<button
+										type="button"
+										class="rounded-md py-1 text-base-500 transition hover:text-base-900 dark:hover:text-base-0 px-0"
+										on:click={() => onCollapseEmbedded?.()}
+										aria-label={$i18n.t('Collapse')}
+									>
+										<ChevronDown className="size-4" strokeWidth="2" />
+									</button>
+								</Tooltip>{/if}
 							{#if onCloseEmbedded}<Tooltip content={$i18n.t('Close')} placement="bottom">
 									<button
 										type="button"
-										class="rounded-md py-1 text-base-500 transition hover:text-base-900 dark:hover:text-white px-0"
+										class="rounded-md py-1 text-base-500 transition hover:text-base-900 dark:hover:text-base-0 px-0"
 										on:click={() => onCloseEmbedded?.()}
 										aria-label={$i18n.t('Close')}
 									>
@@ -6269,12 +6287,16 @@
 					{/if}
 					<div
 						id="chat-pane"
-						class="flex min-h-0 flex-col flex-auto z-10 w-full @container overflow-auto"
+						class="flex min-h-0 flex-col flex-auto z-10 w-full @container {embeddedCollapsed
+							? 'overflow-visible'
+							: 'overflow-auto'}"
 					>
 						<div class="sr-only" aria-live="polite" aria-atomic="true">{liveStatus}</div>
 						{#if (!tabbed && $settings?.landingPageMode === 'chat' && !$selectedFolder) || (!contextOnly && createMessagesList(history, history.currentId).length > 0)}
 							<div
 								class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
+								class:hidden={embeddedCollapsed}
+								class:px-2={embeddedInset}
 								id={messagesContainerId}
 								bind:this={messagesContainerElement}
 								on:scroll={(e) => {
@@ -6329,10 +6351,10 @@
 							{#if isShared && !chat?.write_access}
 								{#if canClone}
 									<div
-										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center gap-2 bg-linear-to-t from-white dark:from-base-900 to-transparent pb-5 pt-10"
+										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center gap-2 bg-linear-to-t from-base-0 dark:from-base-900 to-transparent pb-5 pt-10"
 									>
 										<button
-											class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white pointer-events-auto"
+											class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0 pointer-events-auto"
 											disabled={cloning}
 											on:click={cloneSharedChat}
 										>
@@ -6386,6 +6408,8 @@
 										{contextUsage}
 										{contextCompactionEnabled}
 										{embedded}
+										autofocus={!embeddedCollapsed}
+										{onRecordedAudio}
 										compactHandler={handleManualCompact}
 										statusHandler={handleStatusCommand}
 										forkHandler={handleForkChat}
@@ -6443,7 +6467,7 @@
 											</p>
 										</div>
 									</div>
-								{:else if suggestedPrompts.length > 0}
+								{:else if suggestedPrompts.length > 0 && !embeddedCollapsed}
 									<div class="flex flex-1 items-end px-5 pb-8">
 										<div class="w-full">
 											<div class="mb-2 text-[0.75rem] text-base-300 dark:text-base-700">
@@ -6508,6 +6532,8 @@
 										{contextUsage}
 										{contextCompactionEnabled}
 										{embedded}
+										autofocus={!embeddedCollapsed}
+										{onRecordedAudio}
 										compactHandler={handleManualCompact}
 										statusHandler={handleStatusCommand}
 										forkHandler={handleForkChat}

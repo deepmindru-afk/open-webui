@@ -3,12 +3,13 @@
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 
-	import { config, user } from '$lib/stores';
+	import { config, user, recentChats, refreshRecentChats } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 
 	import { blur, fade } from 'svelte/transition';
 
 	import Suggestions from './Suggestions.svelte';
+	import RecentChats from './RecentChats.svelte';
 	import { sanitizeResponseContent } from '$lib/utils';
 	import {
 		resolveLocalizedModelDescription,
@@ -19,6 +20,7 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
 	import { getChatContext } from '$lib/components/chat/context';
+	import { firstNameOf, getGreeting } from '$lib/utils/greeting';
 
 	const { models: _models, temporary } = getChatContext();
 
@@ -47,9 +49,19 @@
 	$: selectedModelDescription =
 		$config?.license_metadata?.chat_placeholder_description ||
 		resolveLocalizedModelDescription(selectedModel, $i18n.language);
-	$: selectedSuggestionPrompts =
+	// Time-of-day greeting, unless the model (or license) gives the placeholder a description.
+	$: firstName = firstNameOf($user?.name);
+	$: showGreeting = !!firstName && !selectedModelDescription;
+	$: greeting = getGreeting((key, options) => $i18n.t(key, options), firstName);
+	// The model's own suggestions come first, then recent chats, then the default suggestions.
+	$: modelSuggestionPrompts =
 		resolveLocalizedModelPromptSuggestions(atSelectedModel, $i18n.language) ??
-		resolveLocalizedModelPromptSuggestions(models[selectedModelIdx], $i18n.language) ??
+		resolveLocalizedModelPromptSuggestions(models[selectedModelIdx], $i18n.language);
+	$: showRecentChats = !modelSuggestionPrompts?.length && ($recentChats?.length ?? 0) > 0;
+	// Until recent chats first load, show neither rather than flash the defaults.
+	$: waitingForRecentChats = !modelSuggestionPrompts?.length && $recentChats === null;
+	$: selectedSuggestionPrompts =
+		modelSuggestionPrompts ??
 		resolveLocalizedPromptSuggestions(
 			$config?.default_prompt_suggestions,
 			$config?.default_prompt_suggestions_i18n ?? {},
@@ -59,12 +71,13 @@
 
 	onMount(() => {
 		mounted = true;
+		refreshRecentChats(localStorage.token);
 	});
 </script>
 
 {#key mounted}
 	<div class="m-auto w-full max-w-[58rem] px-8 lg:px-20">
-		<div class="flex justify-start">
+		<div class="flex justify-start" class:hidden={showGreeting}>
 			<div class="flex -space-x-4 mb-0.5" in:fade={{ duration: 200 }}>
 				{#each models as model, modelIdx}
 					<button
@@ -88,7 +101,7 @@
 						>
 							<img
 								src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
-								class=" size-[2.7rem] rounded-full"
+								class=" size-[2.7rem] rounded-2xl"
 								alt=""
 								draggable="false"
 								on:error={(e) => {
@@ -120,8 +133,10 @@
 			class=" mt-2 mb-4 text-3xl text-base-800 dark:text-base-100 text-left flex items-center gap-4"
 		>
 			<div>
-				<h2 class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
-					{#if selectedModelName}
+				<h2 class="line-clamp-1" class:capitalize={!showGreeting} in:fade={{ duration: 200 }}>
+					{#if showGreeting}
+						{greeting}
+					{:else if selectedModelName}
 						{selectedModelName}
 					{:else}
 						{$i18n.t('Hello, {{name}}', { name: $user?.name })}
@@ -165,11 +180,15 @@
 		</div>
 
 		<div class=" w-full" in:fade={{ duration: 200, delay: 300 }}>
-			<Suggestions
-				className="grid grid-cols-2"
-				suggestionPrompts={selectedSuggestionPrompts}
-				{onSelect}
-			/>
+			{#if showRecentChats}
+				<RecentChats chats={$recentChats} showIdentifier={!selectedSuggestionPrompts?.length} />
+			{:else if !waitingForRecentChats}
+				<Suggestions
+					className="grid grid-cols-2"
+					suggestionPrompts={selectedSuggestionPrompts}
+					{onSelect}
+				/>
+			{/if}
 		</div>
 	</div>
 {/key}

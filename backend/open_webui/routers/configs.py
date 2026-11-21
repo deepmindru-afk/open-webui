@@ -13,6 +13,7 @@ from open_webui.models.config import Config
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.headers import bearer_auth_header, get_custom_headers
+from open_webui.utils.machines import MANAGED_SCHEMES
 from open_webui.utils.mcp.client import MCPClient
 from open_webui.utils.oauth import (
     OAUTH_MAX_FIELD_SIZE,
@@ -333,12 +334,14 @@ class TerminalServersConfigForm(BaseModel):
     TERMINAL_SERVER_CONNECTIONS: list[TerminalServerConnection]
 
 
-@router.get('/terminal_servers')
+@router.get('/machines')
+@router.get('/terminal_servers', deprecated=True, include_in_schema=False)
 async def get_terminal_servers_config(request: Request, user=Depends(get_admin_user)):
-    return {'TERMINAL_SERVER_CONNECTIONS': await Config.get('terminal_server.connections')}
+    return {'TERMINAL_SERVER_CONNECTIONS': await Config.get('machines.connections')}
 
 
-@router.post('/terminal_servers')
+@router.post('/machines')
+@router.post('/terminal_servers', deprecated=True, include_in_schema=False)
 async def set_terminal_servers_config(
     request: Request,
     form_data: TerminalServersConfigForm,
@@ -347,7 +350,27 @@ async def set_terminal_servers_config(
     connections = [
         connection.model_dump(exclude={'policy', 'lifecycle'}) for connection in form_data.TERMINAL_SERVER_CONNECTIONS
     ]
-    await Config.upsert({'terminal_server.connections': connections})
+
+    # Managed machines (SSH, this computer) are run by /api/v1/machines: the browser can rename
+    # or disable them, but never change where they point or their key.
+    stored = await Config.get('machines.connections', []) or []
+    machines = {c['id']: c for c in stored if (c.get('ssh') or c.get('local')) and c.get('id')}
+    for connection in connections:
+        machine = machines.get(connection.get('id'))
+        if machine:
+            connection.pop('ssh', None)
+            connection.pop('local', None)
+            connection.update({k: machine[k] for k in ('url', 'key', 'ssh', 'local') if k in machine})
+    # ssh:// and local:// entries that are not stored machines were removed elsewhere; never re-create them.
+    connections = [
+        c for c in connections if c.get('id') in machines or not str(c.get('url') or '').startswith(MANAGED_SCHEMES)
+    ]
+    # A page opened before a machine was added does not know about it, so keep machines the
+    # form left out. Removing a machine goes through DELETE /api/v1/machines/{id}.
+    submitted = {connection.get('id') for connection in connections}
+    connections += [machine for machine_id, machine in machines.items() if machine_id not in submitted]
+
+    await Config.upsert({'machines.connections': connections})
 
     await set_terminal_servers(request)
 
@@ -355,14 +378,15 @@ async def set_terminal_servers_config(
         request,
         EVENTS.CONFIG_TERMINAL_SERVERS_UPDATED,
         actor=user,
-        subject_id='terminal_server.connections',
+        subject_id='machines.connections',
         subject_type='config',
         data={'count': len(connections)},
     )
     return {'TERMINAL_SERVER_CONNECTIONS': connections}
 
 
-@router.post('/terminal_servers/verify')
+@router.post('/machines/verify')
+@router.post('/terminal_servers/verify', deprecated=True, include_in_schema=False)
 async def verify_terminal_server_connection(
     request: Request, form_data: TerminalServerConnection, user=Depends(get_admin_user)
 ):
@@ -383,11 +407,16 @@ async def verify_terminal_server_connection(
     if form_data.auth_type in ('bearer', 'session') and form_data.key:
         headers.update(bearer_auth_header(form_data.key))
 
+    timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+    if base_url.startswith(MANAGED_SCHEMES):
+        from open_webui.utils.machines import get_machine_client
+
+        client = get_machine_client(base_url, timeout=timeout)  # through the machine's socket
+    else:
+        client = aiohttp.ClientSession(trust_env=True, timeout=timeout)
+
     try:
-        async with aiohttp.ClientSession(
-            trust_env=True,
-            timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT),
-        ) as session:
+        async with client as session:
             # Orchestrators expose a templates API; plain terminals don't.
             try:
                 async with session.get(

@@ -12,6 +12,7 @@
 	import { isSavedChatId } from '$lib/utils/chatId';
 	import {
 		anchorRange,
+		middleTruncate,
 		getCommentSurfaces,
 		surfaceRevision,
 		commentSelectionDraft,
@@ -358,6 +359,11 @@
 			hideOnClick: false,
 			offset: [0, 0]
 		});
+		// Popper only re-measures on scroll/resize; re-place (flip) as soon as the composer grows.
+		const resizeObserver = new ResizeObserver(() => {
+			if (popup?.state.isVisible) void popup.popperInstance?.update();
+		});
+		resizeObserver.observe(preview);
 		mounted = true;
 		document.addEventListener('mousemove', move);
 		document.addEventListener('mouseleave', leave);
@@ -370,6 +376,7 @@
 		window.addEventListener('focus', refresh);
 		window.addEventListener('comments:updated', refresh);
 		return () => {
+			resizeObserver.disconnect();
 			mounted = false;
 			clearTimeout(refreshTimer);
 			for (const request of requests.values()) request.abort();
@@ -397,7 +404,7 @@
 <div class="hidden">
 	<div
 		bind:this={preview}
-		class="w-80 max-w-[calc(100vw-24px)] rounded-2xl border border-base-100 dark:border-base-800 bg-white dark:bg-base-850 text-base-800 dark:text-base-200 shadow-lg"
+		class="w-80 max-w-[calc(100vw-24px)] rounded-2xl border border-base-100 dark:border-base-800 bg-base-0 dark:bg-base-850 text-base-800 dark:text-base-200 shadow-lg"
 	>
 		{#if $commentSelectionDraft}
 			{@const draft = $commentSelectionDraft}
@@ -418,16 +425,16 @@
 					>
 				</div>
 				<div
-					class="my-1 border-l-2 border-base-200 dark:border-base-700 ps-2 text-xs text-base-500 dark:text-base-400 whitespace-pre-wrap break-words"
+					class="my-1 border-l-2 border-base-200 dark:border-base-700 ps-2 text-xs text-base-500 dark:text-base-400 break-words"
+					title={draft.anchor.quote}
 				>
-					{draft.anchor.quote}
+					{middleTruncate(draft.anchor.quote)}
 				</div>
 				<div class="-mr-1 mt-2">
 					{#key `${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.start}:${draft.anchor.end}`}
 						<CommentComposer
 							bind:this={composer}
 							resource={draft.options}
-							scrollable={false}
 							embedded={true}
 							draftKey={`${$user?.id}:${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.source}:${draft.anchor.start}:${draft.anchor.end}`}
 							onCancel={dismissDraft}
@@ -477,12 +484,15 @@
 				</div>
 				{#if comment.meta?.anchor}
 					<div
-						class="my-1 border-l-2 border-base-200 dark:border-base-700 ps-2 text-xs text-base-500 dark:text-base-400 whitespace-pre-wrap break-words"
+						class="my-1 border-l-2 border-base-200 dark:border-base-700 ps-2 text-xs text-base-500 dark:text-base-400 break-words"
+						title={comment.meta.anchor.quote}
 					>
-						{comment.meta.anchor.quote}
+						{middleTruncate(comment.meta.anchor.quote)}
 					</div>
 				{/if}
-				<div class="mt-2 text-[0.8125rem] text-base-600 dark:text-base-300 break-words">
+				<div
+					class="scrollbar-hidden mt-2 max-h-40 overflow-y-auto text-[0.8125rem] text-base-600 dark:text-base-300 break-words"
+				>
 					<Markdown
 						id={`comment-preview-${comment.id}`}
 						content={comment.content}
@@ -501,6 +511,7 @@
 					<CommentReplyComposer
 						{comment}
 						autofocus={false}
+						compact={true}
 						className=""
 						onCancel={null}
 						onSubmitted={hide}

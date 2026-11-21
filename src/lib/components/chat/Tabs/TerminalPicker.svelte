@@ -50,15 +50,15 @@
 
 <Modal
 	size="sm"
-	ariaLabel={$i18n.t('Select a terminal')}
+	ariaLabel={$i18n.t('Select a machine')}
 	onRequestClose={onclose}
-	className="bg-white dark:bg-base-850 rounded-xl overflow-hidden !border-base-100 dark:!border-base-800 text-base-700 dark:text-base-100 font-normal"
+	className="bg-base-0 dark:bg-base-850 rounded-xl overflow-hidden !border-base-100 dark:!border-base-800 text-base-700 dark:text-base-100 font-normal"
 >
 	<div class="flex h-10 items-center gap-2 px-3">
 		<input
 			bind:value={query}
 			role="combobox"
-			aria-label={$i18n.t('Select a terminal')}
+			aria-label={$i18n.t('Select a machine')}
 			aria-autocomplete="list"
 			aria-expanded={filteredTerminals.length > 0}
 			aria-controls="terminal-picker-options"
@@ -67,7 +67,7 @@
 				: undefined}
 			autocomplete="off"
 			spellcheck="false"
-			placeholder={$i18n.t('Select a terminal')}
+			placeholder={$i18n.t('Select a machine')}
 			class="h-8 min-w-0 flex-1 bg-transparent text-[0.8125rem] font-normal outline-none placeholder:text-base-400 dark:placeholder:text-base-500"
 			on:keydown={handleKeydown}
 		/>
@@ -75,10 +75,11 @@
 			<KeyPill text="Esc" />
 		</button>
 	</div>
+	<!-- Earlier wording, kept so i18n:parse does not drop its translations: $i18n.t('Terminals') -->
 	<div
 		id="terminal-picker-options"
 		role="listbox"
-		aria-label={$i18n.t('Terminals')}
+		aria-label={$i18n.t('Machines')}
 		class="max-h-[min(20rem,60dvh)] overflow-y-auto px-1 pb-1"
 	>
 		{#each filteredTerminals as terminal, index (terminal.id)}
@@ -108,7 +109,7 @@
 	</div>
 	{#if !filteredTerminals.length}
 		<div role="status" class="px-3 pb-3 pt-1 text-[0.6875rem] text-base-400 dark:text-base-500">
-			{$i18n.t('No terminals found')}
+			{$i18n.t('No machines found')}
 		</div>
 	{/if}
 </Modal>

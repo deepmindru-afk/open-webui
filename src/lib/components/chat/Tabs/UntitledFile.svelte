@@ -9,7 +9,7 @@
 		joinTerminalPath,
 		type FileEntry,
 		type TerminalTarget
-	} from '$lib/apis/terminal';
+	} from '$lib/apis/machines';
 	import FileCodeEditor from '../FileNav/FileCodeEditor.svelte';
 	import Icon from '../FileNav/Icon.svelte';
 	import FileTypeIcon from '../FileNav/FileTypeIcon.svelte';
@@ -154,7 +154,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
-	<div class="m-0 flex shrink-0 items-center gap-1 px-2 pt-0 pb-1.5">
+	<div class="m-0 flex shrink-0 items-center gap-1 px-2 pb-0.75">
 		<span class="min-w-0 flex-1 truncate text-xs text-base-700 dark:text-base-300" title={label}
 			>{label}</span
 		>
@@ -186,7 +186,7 @@
 	onRequestClose={() => {
 		if (!saving) finishSave(false);
 	}}
-	className="bg-white dark:bg-base-900 rounded-2xl"
+	className="bg-base-0 dark:bg-base-900 rounded-2xl"
 >
 	<form class="flex max-h-[26rem] flex-col p-3 text-sm" on:submit|preventDefault={write}>
 		<label class="flex items-center gap-2 pb-3">

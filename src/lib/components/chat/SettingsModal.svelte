@@ -178,12 +178,13 @@
 	const shouldShowSettingGroup = (tabIds: string[], index: number) =>
 		index === 0 || settingGroupTitle(tabIds[index]) !== settingGroupTitle(tabIds[index - 1]);
 	// Code Execution and Pipelines are kept for existing setups, so they sit behind a closed
-	// "Legacy" row at the end of Tools. It opens on click, while one of them is selected, or
+	// "Legacy" row at the end of Tools. It opens on click, when one of them gets selected, or
 	// while searching.
 	const legacyAdminTabs = ['admin:code-execution', 'admin:pipelines'];
 	let showLegacyTabs = false;
-	$: legacyTabsOpen =
-		showLegacyTabs || legacyAdminTabs.includes(selectedTab) || search.trim() !== '';
+	// Open once when a legacy tab becomes selected, but leave it collapsible afterwards.
+	$: if (legacyAdminTabs.includes(selectedTab)) showLegacyTabs = true;
+	$: legacyTabsOpen = showLegacyTabs || search.trim() !== '';
 	const settingGroupHeadingClass = (first: boolean) =>
 		`hidden md:block shrink-0 text-[0.625rem] text-base-600 dark:text-base-500 px-2 ${
 			first ? 'mt-0.5' : 'mt-2'
@@ -300,7 +301,7 @@
 			id: 'admin:integrations',
 			titleKey: 'settings.admin.integrations.title',
 			title: $i18n.t('settings.admin.integrations.title'),
-			searchPrefixes: ['settings.admin.integrations.']
+			searchPrefixes: ['settings.admin.integrations.', 'settings.admin.general.apps.']
 		},
 		{
 			id: 'admin:documents',
@@ -470,7 +471,7 @@
 	const tabButtonClass = (active: boolean) =>
 		`flex items-center gap-1.5 h-7 px-2 md:w-full shrink-0 rounded-lg text-xs text-left transition-colors duration-75 ${
 			active
-				? 'font-medium text-base-900 dark:text-white bg-base-50 dark:bg-white/[0.04]'
+				? 'font-medium text-base-900 dark:text-base-0 bg-base-50 dark:bg-base-0/[0.04]'
 				: 'text-base-600 hover:text-base-700 dark:text-base-400 dark:hover:text-base-300'
 		}`;
 
@@ -511,14 +512,14 @@
 
 <Modal
 	size="full"
-	containerClassName="p-4 sm:p-6 lg:p-8"
-	className="!w-[calc(100vw-2rem)] sm:!w-[calc(100vw-3rem)] lg:!w-[calc(100vw-4rem)] h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] flex flex-col md:flex-row bg-white dark:bg-base-900 rounded-4xl overflow-hidden"
+	containerClassName="p-3 sm:p-4 lg:p-6"
+	className="h-[calc(100dvh-1.5rem)] sm:h-[calc(100dvh-2rem)] lg:h-[calc(100dvh-3rem)] flex flex-col md:flex-row bg-base-0 dark:bg-base-900 rounded-4xl overflow-hidden"
 	ariaLabel={$i18n.t('Settings')}
 	bind:show={modalShow}
 >
 	<nav
 		id="settings-tabs-container"
-		class="shrink-0 min-w-0 md:min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-100/30 dark:border-white/[0.02] md:w-[15rem]"
+		class="shrink-0 min-w-0 md:min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-100/30 dark:border-base-0/[0.02] md:w-[15rem]"
 	>
 		<div class="flex items-center gap-1 m-1 md:mb-0 shrink-0">
 			<button
@@ -534,7 +535,7 @@
 			<button
 				bind:this={searchButton}
 				type="button"
-				class="flex md:hidden size-7 shrink-0 items-center justify-center rounded-lg text-base-600 hover:bg-base-50 hover:text-base-700 dark:text-base-500 dark:hover:bg-white/[0.04] dark:hover:text-base-300"
+				class="flex md:hidden size-7 shrink-0 items-center justify-center rounded-lg text-base-600 hover:bg-base-50 hover:text-base-700 dark:text-base-500 dark:hover:bg-base-0/[0.04] dark:hover:text-base-300"
 				aria-label={$i18n.t('Search')}
 				aria-expanded={showSearch || !!search}
 				aria-controls="search-input-settings-modal"
@@ -546,7 +547,7 @@
 
 		{#if !$mobile || showSearch || search}
 			<div
-				class="flex items-center gap-1.5 h-7 px-2 mx-1 md:mt-1 mb-0.5 shrink-0 rounded-lg text-xs bg-base-50/70 dark:bg-white/[0.03]"
+				class="flex items-center gap-1.5 h-7 px-2 mx-1 md:mt-1 mb-0.5 shrink-0 rounded-lg text-xs bg-base-50/70 dark:bg-base-0/[0.03]"
 			>
 				<div class="self-center rounded-l-xl bg-transparent">
 					<Search className="size-3.5" strokeWidth="1.5" />
@@ -740,7 +741,7 @@
 
 			{#if $user?.role === 'admin' && filteredAdminSettings.length > 0}
 				<div
-					class="hidden md:block shrink-0 self-stretch h-px mx-1 my-2 bg-base-100/40 dark:bg-white/[0.025]"
+					class="hidden md:block shrink-0 self-stretch h-px mx-1 my-2 bg-base-100/40 dark:bg-base-0/[0.025]"
 				></div>
 				<span class="hidden md:block text-[0.625rem] text-base-600 dark:text-base-500 px-2 mb-0.5">
 					{$i18n.t('Admin')}
@@ -762,7 +763,7 @@
 								aria-expanded={legacyTabsOpen}
 								class="flex items-center gap-1.5 h-7 px-2 md:w-full shrink-0 rounded-lg text-xs text-left text-base-500 hover:text-base-700 dark:text-base-500 dark:hover:text-base-300 transition-colors duration-75"
 								on:click={() => {
-									showLegacyTabs = !legacyTabsOpen;
+									showLegacyTabs = !showLegacyTabs;
 								}}
 							>
 								<!-- Small chevron in an icon-sized slot, so the label lines up with the tabs. -->

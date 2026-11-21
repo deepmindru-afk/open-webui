@@ -414,6 +414,7 @@
 		}
 
 		if (!testResult?.documents?.length) {
+			// Earlier wording, kept so i18n:parse does not drop its translations: $i18n.t('Test must pass before a source is created.')
 			toast.error($i18n.t('Test the source before creating it.'));
 			return;
 		}
@@ -578,7 +579,7 @@
 		: $i18n.t('Add Knowledge Connection')}
 	bind:show={showSourceModal}
 	size="sm"
-	className="bg-white dark:bg-base-900 rounded-4xl"
+	className="bg-base-0 dark:bg-base-900 rounded-4xl"
 >
 	<div>
 		<div class="flex justify-between dark:text-base-100 px-4 pt-3 pb-1">
@@ -816,7 +817,7 @@
 														>{storeOptions.find((store) => store.id === id)?.name ?? id}</span
 													>
 													<button
-														class="text-base-400 hover:text-base-900 dark:hover:text-white transition"
+														class="text-base-400 hover:text-base-900 dark:hover:text-base-0 transition"
 														type="button"
 														aria-label={$i18n.t('Remove')}
 														on:click={() => removeStoreId(id)}
@@ -1094,7 +1095,7 @@
 							{/if}
 
 							<button
-								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white disabled:cursor-not-allowed"
+								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0 disabled:cursor-not-allowed"
 								type="submit"
 								disabled={creating ||
 									(connectionMode
@@ -1134,7 +1135,7 @@
 		<Tooltip content={$i18n.t('settings.admin.integrations.externalKnowledge.addConnection.label')}>
 			<button
 				aria-label={$i18n.t('settings.admin.integrations.externalKnowledge.addConnection.label')}
-				class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-black/5 hover:text-base-900 dark:text-base-600 dark:hover:bg-white/5 dark:hover:text-white"
+				class="flex size-6 items-center justify-center rounded-lg text-base-400 transition-colors hover:bg-base-1000/5 hover:text-base-900 dark:text-base-600 dark:hover:bg-base-0/5 dark:hover:text-base-0"
 				on:click={openCreateSource}
 				type="button"
 			>
@@ -1155,10 +1156,11 @@
 						<DatabaseSettings className="size-4" strokeWidth="1.5" />
 					</Tooltip>
 					<div class="outline-hidden w-full bg-transparent text-xs min-w-0 line-clamp-1">
-						<label
-							for={`knowledge-connection-${connection.id}-control`}
-							class="text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 dark:group-hover/setting-row:text-white"
-							>{connection.name}</label
+						<button
+							type="button"
+							on:click={() => openEditConnection(connection)}
+							class="text-left cursor-pointer text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 dark:group-hover/setting-row:text-white"
+							>{connection.name}</button
 						>
 						{' '}
 						<span class="text-base-500">
@@ -1211,10 +1213,12 @@
 							</Tooltip>
 
 							<div class="outline-hidden w-full bg-transparent text-xs min-w-0 line-clamp-1">
-								<label
-									for={`knowledge-${item.id}-control`}
-									class="text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 group-focus-within/setting-row:text-base-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white group-has-[button[id$=-control]:enabled]/setting-row:cursor-pointer group-has-[button[id$=-control]:disabled]/setting-row:cursor-not-allowed"
-									>{item.name}</label
+								<button
+									type="button"
+									disabled={!connection}
+									on:click={() => openEditSource(item)}
+									class="text-left cursor-pointer disabled:cursor-default text-base-600 dark:text-base-400 transition-colors duration-150 group-hover/setting-row:text-base-900 group-focus-within/setting-row:text-base-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white"
+									>{item.name}</button
 								>
 								{' '}
 								<span class="text-base-500">

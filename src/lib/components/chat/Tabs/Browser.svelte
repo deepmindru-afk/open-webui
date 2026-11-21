@@ -10,8 +10,8 @@
 		browserViewUrl,
 		browserFrameUrl,
 		type BrowserSession
-	} from '$lib/apis/terminal/browser';
-	import { getPortProxyUrl, TerminalRequestError, type TerminalTarget } from '$lib/apis/terminal';
+	} from '$lib/apis/machines/browser';
+	import { getPortProxyUrl, TerminalRequestError, type TerminalTarget } from '$lib/apis/machines';
 	import PortList from '../FileNav/PortList.svelte';
 	import { settings } from '$lib/stores';
 	import Icon from '../FileNav/Icon.svelte';
@@ -138,7 +138,7 @@
 			return browserFrameUrl(browserViewUrl(sessionTarget, session), url.href);
 		const port = localPort(url);
 		if (port === null) return url.href;
-		if (!baseUrl) throw new Error($i18n.t('Select a terminal to open localhost URLs.'));
+		if (!baseUrl) throw new Error($i18n.t('Select a machine to open localhost URLs.'));
 		return getPortProxyUrl(baseUrl, port, url.pathname.slice(1) + url.search + url.hash);
 	};
 	const remember = (url: string, replace = false) => {
@@ -294,7 +294,7 @@
 			<Tooltip content={$i18n.t(button.name)}
 				><button
 					type="button"
-					class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-base-500 transition-colors hover:bg-base-100 hover:text-base-700 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-white/6 dark:hover:text-base-300"
+					class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-base-500 transition-colors hover:bg-base-100 hover:text-base-700 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-base-0/6 dark:hover:text-base-300"
 					disabled={button.disabled}
 					aria-label={$i18n.t(button.name)}
 					on:click={button.action}
@@ -314,14 +314,14 @@
 				aria-label={$i18n.t('URL')}
 				placeholder="https://example.com"
 				spellcheck="false"
-				class="h-7 w-full min-w-0 rounded-full bg-transparent py-1 pr-8 pl-3 text-left text-xs font-normal text-base-700 outline-none transition-colors hover:bg-base-100/60 focus:bg-base-100 sm:px-8 sm:text-center dark:text-base-300 dark:hover:bg-white/5 dark:focus:bg-white/8"
+				class="h-7 w-full min-w-0 rounded-full bg-transparent py-1 pr-8 pl-3 text-left text-xs font-normal text-base-700 outline-none transition-colors hover:bg-base-100/60 focus:bg-base-100 sm:px-8 sm:text-center dark:text-base-300 dark:hover:bg-base-0/5 dark:focus:bg-base-0/8"
 			/>
 			<Tooltip content={$i18n.t('Open in new tab')}
 				><button
 					type="button"
 					disabled={!currentUrl && !frameUrl}
 					aria-label={$i18n.t('Open in new tab')}
-					class="absolute top-1/2 right-1 z-10 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-xs text-base-500 hover:bg-base-200/60 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-white/8"
+					class="absolute top-1/2 right-1 z-10 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-xs text-base-500 hover:bg-base-200/60 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-base-0/8"
 					on:click={() =>
 						window.open(
 							session
@@ -340,7 +340,7 @@
 				<button
 					type="button"
 					aria-label={$i18n.t('Browser options')}
-					class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-base-500 transition-colors hover:bg-base-100 hover:text-base-700 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-white/6 dark:hover:text-base-300"
+					class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-base-500 transition-colors hover:bg-base-100 hover:text-base-700 disabled:pointer-events-none disabled:opacity-35 dark:hover:bg-base-0/6 dark:hover:text-base-300"
 					><Icon name="three-dots" size={12} /></button
 				>
 				<div slot="content">
@@ -443,7 +443,7 @@
 					bind:this={iframe}
 					src={frameUrl}
 					title={$i18n.t('Browser')}
-					class="block h-full w-full border-0 bg-white"
+					class="block h-full w-full border-0 bg-base-0"
 					sandbox="allow-scripts{!session && ($settings?.terminalPreviewAllowSameOrigin ?? false)
 						? ' allow-same-origin'
 						: ''} allow-forms allow-popups allow-modals allow-downloads"

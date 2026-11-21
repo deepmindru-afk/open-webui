@@ -54,6 +54,10 @@ ACTIVE_CHAT_GAP_SECONDS = 30 * 60
 # Filter token for chats without a folder status. The status itself is stored and returned as null;
 # only query strings, which can't carry null, need a name for it.
 NO_FOLDER_STATUS = 'none'
+# Priorities are fixed, most urgent first. A chat without one stores nothing; 'none' is only
+# the filter token for that, like NO_FOLDER_STATUS.
+FOLDER_PRIORITIES = ('urgent', 'high', 'medium', 'low')
+NO_FOLDER_PRIORITY = 'none'
 
 
 def _as_seconds(value):
@@ -182,9 +186,21 @@ def chat_search_message_content_match_sql(dialect_name: str, key: str) -> str:
     raise NotImplementedError(f'Unsupported dialect: {dialect_name}')
 
 
+def folder_priority_rank():
+    """Higher is more urgent, so descending puts Urgent first; no priority ranks lowest."""
+    return case(
+        {'urgent': 4, 'high': 3, 'medium': 2, 'low': 1},
+        value=Chat.meta['folder_priority'].as_string(),
+        else_=0,
+    )
+
+
 def chat_list_order(sort_by: str = 'updated_at', sort_dir: str = 'desc', user_id: str | None = None):
+    if sort_by == 'priority':
+        rank = folder_priority_rank()
+        return (rank.asc() if sort_dir == 'asc' else rank.desc()), Chat.updated_at.desc(), Chat.id
     if sort_by != 'unread_updated_at':
-        sort_column = Chat.title if sort_by == 'title' else Chat.updated_at
+        sort_column = {'title': Chat.title, 'created_at': Chat.created_at}.get(sort_by, Chat.updated_at)
         order_clause = sort_column.asc() if sort_dir == 'asc' else sort_column.desc()
         return order_clause, Chat.id
 
@@ -1817,7 +1833,7 @@ class ChatTable:
     async def get_chat_title_id_list_by_user_id(
         self,
         user_id: str,
-        include_archived: bool = False,
+        status: str = 'active',  # 'active', 'archived' or 'all'
         include_folders: bool = False,
         include_pinned: bool = False,
         sort_by: str = 'updated_at',
@@ -1827,9 +1843,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
-                user_id=user_id
-            )
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.archived
+            ).filter_by(user_id=user_id)
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
 
             if not include_folders:
@@ -1838,7 +1854,9 @@ class ChatTable:
             if not include_pinned:
                 stmt = stmt.filter(or_(Chat.pinned == False, Chat.pinned == None))
 
-            if not include_archived:
+            if status == 'archived':
+                stmt = stmt.filter_by(archived=True)
+            elif status != 'all':
                 stmt = stmt.filter_by(archived=False)
 
             stmt = stmt.order_by(*chat_list_order(sort_by, sort_dir))
@@ -1859,6 +1877,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'archived': bool(chat[5]),
                     }
                 )
                 for chat in all_chats
@@ -2658,6 +2677,7 @@ class ChatTable:
         tag_ids: list[str] | None = None,
         status_ids: list[str] | None = None,
         valid_status_ids: tuple[str, ...] = (),
+        priority_ids: list[str] | None = None,
     ) -> list:
         conditions = [
             Chat.folder_id == folder_id,
@@ -2710,19 +2730,28 @@ class ChatTable:
                 # Unknown or deleted statuses read as no status.
                 matches.append(or_(stored.is_(None), stored.not_in(list(valid_status_ids))))
             conditions.append(or_(*matches))
+
+        priority_ids = set(priority_ids or [])
+        if priority_ids:
+            stored = Chat.meta['folder_priority'].as_string()
+            named = sorted(priority_ids & set(FOLDER_PRIORITIES))
+            matches = [stored.in_(named)] if named else []
+            if NO_FOLDER_PRIORITY in priority_ids:
+                matches.append(or_(stored.is_(None), stored.not_in(list(FOLDER_PRIORITIES))))
+            conditions.append(or_(*matches))
         return conditions
 
     async def get_folder_chat_page(
         self,
         folder_id: str,
         user_id: str,
-        folder_write_access: bool = False,
         skip: int = 0,
         limit: int = 50,
         search: str = '',
         tag_ids: list[str] | None = None,
         status_ids: list[str] | None = None,
         valid_status_ids: tuple[str, ...] = (),
+        priority_ids: list[str] | None = None,
         user_ids: list[str] | None = None,
         activity: str | None = None,
         updated_at_gte: int | None = None,
@@ -2735,7 +2764,7 @@ class ChatTable:
         async with get_async_db_context(db) as session:
             dialect_name = (await session.connection()).dialect.name
             conditions = self._folder_chat_conditions(
-                folder_id, dialect_name, search, tag_ids, status_ids, valid_status_ids
+                folder_id, dialect_name, search, tag_ids, status_ids, valid_status_ids, priority_ids
             )
 
             if user_ids:
@@ -2875,10 +2904,9 @@ class ChatTable:
                 for key, value in (meta.get('folder_status_durations') or {}).items()
                 if key in valid_status_ids and (seconds := _as_seconds(value))
             }
-            # Folder editors may set tags (kept in the owner's tag records) and status on any chat here.
-            chat['can_edit_tags'] = folder_write_access or chat['user_id'] == user_id
+            priority = meta.get('folder_priority')
+            chat['priority'] = priority if priority in FOLDER_PRIORITIES else None
             chat['automation_id'] = meta.get('automation_id')
-            chat['can_edit_status'] = folder_write_access or chat['user_id'] == user_id
             # Only explain matches the title doesn't already show.
             chat['search_snippet'] = (
                 chat_search_snippet(bodies.get(chat['id']) or {}, search)
@@ -2970,6 +2998,28 @@ class ChatTable:
                     }
                 )
             )
+            await session.commit()
+            return True
+
+    async def update_chat_folder_priority_by_id(
+        self, id: str, folder_id: str, user_id: str | None, priority: str | None, db: AsyncSession | None = None
+    ) -> bool:
+        """Set (or with None, clear) a chat's priority in its folder.
+
+        A user_id limits this to that user's chats; None allows any chat in the folder.
+        """
+        async with get_async_db_context(db) as session:
+            row = (
+                await session.execute(
+                    select(Chat.meta).filter_by(id=id, folder_id=folder_id, **({'user_id': user_id} if user_id else {}))
+                )
+            ).one_or_none()
+            if row is None:
+                return False
+            meta = {key: value for key, value in (row[0] or {}).items() if key != 'folder_priority'}
+            if priority is not None:
+                meta['folder_priority'] = priority
+            await session.execute(update(Chat).filter_by(id=id).values(meta=meta))
             await session.commit()
             return True
 

@@ -139,8 +139,8 @@
 		</div>
 
 		{#if chat}
-			<div class="px-5 pt-4 pb-5 w-full flex flex-col">
-				<div class="text-sm dark:text-base-300">
+			<div class="px-5 pt-1 pb-5 w-full flex flex-col">
+				<div class="text-xs dark:text-base-300">
 					{#if chat.share_id}
 						<a href="/s/{chat.share_id}" target="_blank"
 							>{$i18n.t('You have shared this chat')}
@@ -186,7 +186,7 @@
 							<label class="flex w-full items-center justify-between mt-3 mb-1 text-xs">
 								<span>{$i18n.t('Sharing mode')}</span>
 								<select
-									class="bg-transparent text-xs outline-none"
+									class="bg-transparent text-xs outline-none pr-5"
 									bind:value={shareMode}
 									on:change={saveAccessGrants}
 								>
@@ -201,7 +201,7 @@
 				<div class="flex justify-end gap-1 mt-3">
 					{#if $config?.features.enable_community_sharing}
 						<button
-							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 bg-base-100 hover:bg-base-200 text-base-800 dark:bg-base-850 dark:text-white dark:hover:bg-base-800"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 bg-base-100 hover:bg-base-200 text-base-800 dark:bg-base-850 dark:text-base-0 dark:hover:bg-base-800"
 							type="button"
 							on:click={() => {
 								shareChat();
@@ -215,7 +215,7 @@
 					{/if}
 
 					<button
-						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-white"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0"
 						type="button"
 						id="copy-and-share-chat-button"
 						on:click={async () => {

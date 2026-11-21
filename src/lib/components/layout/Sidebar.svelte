@@ -39,7 +39,9 @@
 		registerFolderRefreshHandler,
 		setAllChatsRead,
 		setChatActive,
-		setChatReadAt
+		setChatReadAt,
+		chatListView,
+		setChatListView
 	} from '$lib/stores/chatList';
 	import {
 		folderStates,
@@ -120,6 +122,8 @@
 	import Dropdown from '../common/Dropdown.svelte';
 	import DropdownMenu from '../common/DropdownMenu.svelte';
 	import CheckIcon from '../icons/Check.svelte';
+	import ChevronRight from '../icons/ChevronRight.svelte';
+	import DropdownSub from '../common/DropdownSub.svelte';
 	import ArchiveBoxIcon from '../icons/ArchiveBox.svelte';
 	import GarbageBinIcon from '../icons/GarbageBin.svelte';
 	import XMarkIcon from '../icons/XMark.svelte';
@@ -267,6 +271,25 @@
 	let showFolders = false;
 	let showSharedFolders = false;
 	let showChatsMenu = false;
+	$: chatListMenus = [
+		{
+			label: $i18n.t('Status'),
+			key: 'status',
+			choices: [
+				{ value: 'active', label: $i18n.t('Active') },
+				{ value: 'archived', label: $i18n.t('Archived') },
+				{ value: 'all', label: $i18n.t('All') }
+			]
+		},
+		{
+			label: $i18n.t('Sort by'),
+			key: 'sortBy',
+			choices: [
+				{ value: 'updated_at', label: $i18n.t('Last activity') },
+				{ value: 'created_at', label: $i18n.t('Created') }
+			]
+		}
+	] as const;
 
 	let folders: Record<string, any> = {};
 	type SelectedSidebarFolder = { id: string } | null;
@@ -1166,7 +1189,7 @@
 
 	{#if visible}
 		<div
-			class="fixed md:hidden z-40 top-0 right-0 left-0 bottom-0 bg-black w-full min-h-screen h-screen flex justify-center overflow-hidden overscroll-contain {progress >
+			class="fixed md:hidden z-40 top-0 right-0 left-0 bottom-0 bg-base-1000 w-full min-h-screen h-screen flex justify-center overflow-hidden overscroll-contain {progress >
 			0.02
 				? ''
 				: 'pointer-events-none'}"
@@ -1309,8 +1332,8 @@
 											class="self-center flex size-[calc(30px*var(--app-text-scale,1))] items-center justify-center rounded-lg transition {itemId ===
 											activeMenuItemId
 												? ($settings?.highContrastMode ?? false)
-													? 'bg-black/[0.035] dark:bg-white/[0.06]'
-													: 'bg-black/[0.035] dark:bg-white/[0.045]'
+													? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06]'
+													: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045]'
 												: 'group-hover:bg-base-100 dark:group-hover:bg-base-900'}"
 										>
 											{#if itemId === 'notes'}
@@ -1359,7 +1382,7 @@
 													<span
 														class="relative inline-flex size-2.5 rounded-full {true
 															? 'bg-green-500'
-															: 'bg-base-300 dark:bg-base-700'} border-2 border-white dark:border-base-900"
+															: 'bg-base-300 dark:bg-base-700'} border-2 border-base-0 dark:border-base-900"
 													></span>
 												</span>
 											</div>
@@ -1549,8 +1572,8 @@
 											class="grow flex items-center space-x-2 rounded-xl px-2 py-1.5 transition {itemId ===
 											activeMenuItemId
 												? ($settings?.highContrastMode ?? false)
-													? 'bg-black/[0.035] dark:bg-white/[0.06]'
-													: 'bg-black/[0.035] dark:bg-white/[0.045]'
+													? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06]'
+													: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045]'
 												: 'hover:bg-base-100 dark:hover:bg-base-900'}"
 											href={meta.href}
 											on:click={itemClickHandler}
@@ -1791,7 +1814,7 @@
 						}}
 					>
 						<svelte:fragment slot="action">
-							<Dropdown bind:show={showChatsMenu} align="end">
+							<Dropdown bind:show={showChatsMenu} align="start">
 								<Tooltip content={$i18n.t('More')}>
 									<button
 										type="button"
@@ -1804,6 +1827,51 @@
 
 								<div slot="content">
 									<DropdownMenu className="min-w-[10.625rem]">
+										{#each chatListMenus as menu (menu.key)}
+											{@const current = menu.choices.find(
+												(choice) => choice.value === $chatListView[menu.key]
+											)}
+											<DropdownSub
+												contentClass="select-none z-50 max-h-80 overflow-y-auto"
+												maxWidth={320}
+												sideOffset={6}
+											>
+												<button
+													slot="trigger"
+													type="button"
+													class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl px-2 text-left text-[0.8125rem] outline-hidden"
+												>
+													<span class="min-w-0 flex-1 truncate text-left">{menu.label}</span>
+													<span class="truncate text-base-500 dark:text-base-400"
+														>{current?.label}</span
+													>
+													<ChevronRight
+														className="size-3.5 shrink-0 text-base-400 rtl:rotate-180"
+													/>
+												</button>
+												{#each menu.choices as choice (choice.value)}
+													<button
+														type="button"
+														role="menuitemradio"
+														aria-checked={choice.value === current?.value}
+														on:click={() => {
+															showChatsMenu = false;
+															if (choice.value !== current?.value) {
+																setChatListView(localStorage.token, {
+																	[menu.key]: choice.value
+																});
+															}
+														}}
+													>
+														<span class="flex-1 text-left">{choice.label}</span>
+														{#if choice.value === current?.value}<CheckIcon
+																className="size-3! shrink-0"
+															/>{/if}
+													</button>
+												{/each}
+											</DropdownSub>
+										{/each}
+										<hr class="border-base-50/30 dark:border-base-800/30" />
 										<button
 											class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] select-none cursor-pointer hover:bg-base-100 dark:hover:bg-base-900"
 											on:click={markAllChatsReadHandler}
@@ -1964,6 +2032,7 @@
 													createdAt={chat.created_at}
 													updatedAt={chat.updated_at}
 													lastReadAt={chat.last_read_at}
+													archived={chat.archived === true}
 													active={chat.active ?? false}
 													pendingApproval={chat.pending_approval ?? false}
 													{shiftKey}
@@ -2097,7 +2166,7 @@
 													<span
 														class="relative inline-flex size-2.5 rounded-full {true
 															? 'bg-green-500'
-															: 'bg-base-300 dark:bg-base-700'} border-2 border-white dark:border-base-900"
+															: 'bg-base-300 dark:bg-base-700'} border-2 border-base-0 dark:border-base-900"
 													></span>
 												</span>
 											</div>
