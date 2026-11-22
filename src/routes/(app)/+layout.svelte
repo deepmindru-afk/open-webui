@@ -10,10 +10,11 @@
 	import { getBackendConfig, getModels, getVersionUpdates } from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
+	import { getFunctions } from '$lib/apis/functions';
 	import { getFolders } from '$lib/apis/folders';
 	import { getSessionUser } from '$lib/apis/auths';
 	import { getBanners } from '$lib/apis/configs';
-	import { getTerminalServers } from '$lib/apis/machines';
+	import { getMachines } from '$lib/apis/machines';
 	import { getUserSettings } from '$lib/apis/users';
 	import { setAppFontFamily, setTextScale } from '$lib/utils/text-scale';
 
@@ -35,21 +36,21 @@
 		showSettings,
 		showChangelog,
 		temporaryChat,
-		terminalServers,
-		selectedTerminalId,
+		machines,
+		selectedMachineId,
 		showSearch,
 		showSidebar,
 		showTabs,
 		mobile,
 		chatId,
 		chats,
-		folders
+		folders,
+		refreshRecentChats
 	} from '$lib/stores';
 
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import Chat from '$lib/components/chat/Chat.svelte';
 	import { pageTabKey } from '$lib/components/chat/Tabs/tabs';
-	import SettingsModal from '$lib/components/chat/SettingsModal.svelte';
 	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
 	import AccountPending from '$lib/components/layout/Overlay/AccountPending.svelte';
 	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
@@ -61,6 +62,9 @@
 	const appLayout = setContext<AppLayoutContext>('appLayout', {});
 
 	let loaded = false;
+	// Settings (including the admin panels) load on first open, then stay mounted.
+	let settingsRequested = false;
+	$: if ($showSettings) settingsRequested = true;
 	$: routeHasTabs = ['/(app)', '/(app)/c/[id]', '/(app)/folders/[folderId]'].includes(
 		$page.route.id ?? ''
 	);
@@ -98,19 +102,19 @@
 		models.set(await getModels(localStorage.token));
 	};
 
-	const refreshTerminalServers = async () => {
+	const refreshMachines = async () => {
 		if (!$config?.features?.enable_tool_servers) {
-			terminalServers.set([]);
+			machines.set([]);
 			return;
 		}
 		const userId = $user?.id;
 		if (!userId || !localStorage.token) return;
-		const systemTerminals = await getTerminalServers(localStorage.token);
+		const systemMachines = await getMachines(localStorage.token);
 		if ($user?.id !== userId || !$config?.features?.enable_tool_servers) return;
-		terminalServers.set(
-			systemTerminals.map((terminal) => ({
-				...terminal,
-				url: `${WEBUI_API_BASE_URL}/machines/${terminal.id}`,
+		machines.set(
+			systemMachines.map((machine) => ({
+				...machine,
+				url: `${WEBUI_API_BASE_URL}/machines/${machine.id}`,
 				key: localStorage.token
 			}))
 		);
@@ -142,7 +146,7 @@
 				getBackendConfig().then((value) => config.set(value)),
 				setModels(),
 				setTools(),
-				refreshTerminalServers(),
+				refreshMachines(),
 				getSkills(localStorage.token).then((value) => skills.set(value)),
 				getFolders(localStorage.token)
 					.catch(() => [])
@@ -159,9 +163,7 @@
 	onMount(() => {
 		const socketInstance = $socket;
 		const changed = () => {
-			void refreshTerminalServers().catch((error) =>
-				console.error('Unable to refresh terminals', error)
-			);
+			void refreshMachines().catch((error) => console.error('Unable to refresh terminals', error));
 		};
 		const eventHandler = (event: { data?: { type?: string } }) => {
 			if (event?.data?.type === 'machines:changed') {
@@ -253,29 +255,35 @@
 		}
 
 		clearChatInputStorage();
+		// Requested beside settings. The page is drawn once settings are in;
+		// each of these shows up when it arrives.
+		void setBanners().catch((e) => console.error('Failed to load banners:', e));
+		// The new-chat page lists these under the composer; started now so they're in before it draws.
+		void refreshRecentChats(localStorage.token);
+		const lists = Promise.all([
+			setTools().catch((e) => console.error('Failed to load tools:', e)),
+			refreshMachines().catch((e) => console.error('Failed to load machines:', e)),
+			// The chat needs these to apply a model's defaults; without them here it
+			// fetches them one after the other during set-up.
+			getFunctions(localStorage.token)
+				.then((value) => functions.set(value))
+				.catch((e) => console.error('Failed to load functions:', e)),
+			getSkills(localStorage.token)
+				.then((value) => skills.set(value))
+				.catch((e) => console.error('Failed to load skills:', e))
+		]);
+		const modelList = getModels(localStorage.token).catch((e) => {
+			console.error('Failed to load models:', e);
+			// Loaded, with nothing to list: null would mean the list is still on its way.
+			return [];
+		});
 		try {
-			await Promise.all([
-				setBanners().catch((e) => console.error('Failed to load banners:', e)),
-				setTools().catch((e) => console.error('Failed to load tools:', e)),
-				setUserSettings(async () => {
-					await setModels().catch((e) => console.error('Failed to load models:', e));
-				})
-			]);
+			await setUserSettings();
 		} catch (e) {
 			console.error('Failed to load user settings:', e);
 			toast.error($i18n.t('Failed to load Interface settings'));
 			return;
 		}
-
-		await refreshTerminalServers().catch((e) => {
-			console.error('Failed to load terminals:', e);
-		});
-		selectedTerminalId.set(
-			$config?.features?.enable_tool_servers &&
-				$terminalServers?.some((terminal) => terminal.id === localStorage.selectedTerminalId)
-				? localStorage.selectedTerminalId
-				: null
-		);
 
 		const setupKeyboardShortcuts = () => {
 			document.addEventListener('keydown', async (event) => {
@@ -412,28 +420,43 @@
 			localStorage.showTabs = value ? 'true' : 'false';
 		});
 
-		// Persist selectedTerminalId across page loads
-		selectedTerminalId.subscribe((value) => {
-			if (!$config?.features?.enable_tool_servers) return;
-			if (value === null) {
-				delete localStorage.selectedTerminalId;
-			} else {
-				localStorage.selectedTerminalId = value;
-			}
-		});
-
 		await tick();
 
 		loaded = true;
+
+		await lists;
+		// selectedTerminalId is the former key.
+		const storedMachineId = localStorage.selectedMachineId ?? localStorage.selectedTerminalId;
+		delete localStorage.selectedTerminalId;
+		selectedMachineId.set(
+			$config?.features?.enable_tool_servers &&
+				$machines?.some((machine) => machine.id === storedMachineId)
+				? storedMachineId
+				: null
+		);
+
+		// Persist selectedMachineId across page loads
+		selectedMachineId.subscribe((value) => {
+			if (!$config?.features?.enable_tool_servers) return;
+			if (value === null) {
+				delete localStorage.selectedMachineId;
+			} else {
+				localStorage.selectedMachineId = value;
+			}
+		});
+
+		// Set last: the chat sets itself up once the model list is in, and that set-up
+		// reads tools, machines and the selected machine as well.
+		models.set(await modelList);
 	});
 
 	$: if (
 		loaded &&
-		$selectedTerminalId &&
-		$terminalServers !== null &&
-		!$terminalServers.some((terminal) => terminal.id === $selectedTerminalId)
+		$selectedMachineId &&
+		$machines !== null &&
+		!$machines.some((machine) => machine.id === $selectedMachineId)
 	) {
-		selectedTerminalId.set(null);
+		selectedMachineId.set(null);
 	}
 
 	// `$page.url` must be referenced here: `$:` only tracks variables used in
@@ -457,7 +480,11 @@
 	};
 </script>
 
-<SettingsModal bind:show={$showSettings} />
+{#if settingsRequested}
+	{#await import('$lib/components/chat/SettingsModal.svelte') then { default: SettingsModal }}
+		<SettingsModal bind:show={$showSettings} />
+	{/await}
+{/if}
 <ChangelogModal bind:show={$showChangelog} />
 
 {#if WEBUI_BUILD_CHANNEL === 'main' && version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}

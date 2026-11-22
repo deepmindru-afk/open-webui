@@ -1,6 +1,6 @@
 """Machines: Open Terminal servers that Open WebUI reaches and proxies.
 
-Mounted at /api/v1/machines (and, deprecated, /api/v1/terminals).
+Mounted at /api/v1/machines.
 
 Routes:
   /ssh/...                       — add, upgrade, restart and remove machines over SSH (admin)
@@ -21,7 +21,7 @@ import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from multidict import CIMultiDict
-from open_webui.config import TERMINAL_PROXY_HEADERS
+from open_webui.config import MACHINE_PROXY_HEADERS
 from open_webui.env import AIOHTTP_CLIENT_SESSION_SSL, ENABLE_TOOL_SERVERS
 from open_webui.events import EVENTS, publish_event
 from open_webui.models.groups import Groups
@@ -29,17 +29,17 @@ from open_webui.routers.templates import router as templates_router
 from open_webui.utils.access_control import has_connection_access
 from open_webui.utils.auth import get_admin_user, get_verified_user, get_verified_user_by_token
 from open_webui.utils.browser import browser_access, create_browser_token
-from open_webui.utils.tether import RelayInterrupted, get_terminal_connections
+from open_webui.utils.tether import RelayInterrupted, get_machine_connections
 from open_webui.utils.headers import bearer_auth_header, normalize_bearer_token
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.machines import MachineError, managed, local as local_machines, ssh as ssh_machines
 from open_webui.utils.machines.managed import describe
 from open_webui.utils.machines import (
     get_machine_client,
-    find_terminal_connection,
-    terminal_headers,
-    get_terminal_server_url,
-    terminal_chat_uploads,
+    find_machine_connection,
+    machine_headers,
+    get_machine_url,
+    machine_chat_uploads,
 )
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -95,6 +95,9 @@ class CreateForm(Pinned):
     id: str = Field(pattern=SSH_MACHINE_ID)
     name: str = Field('', max_length=100)
     version: str = Field('latest', max_length=20)  # 'latest' or an exact Open Terminal version
+    # For `open-terminal install-deps`: dependency sets it knows by name, and apt packages. Needs passwordless sudo.
+    deps: list[str] = Field(default_factory=list, max_length=16)
+    packages: list[str] = Field(default_factory=list, max_length=64)
 
 
 class LocalForm(BaseModel):
@@ -106,6 +109,13 @@ class LocalForm(BaseModel):
 
 class UpgradeForm(BaseModel):
     version: str | None = Field(None, max_length=20)  # omitted: keep the machine's current choice
+    deps: list[str] | None = Field(None, max_length=16)
+    packages: list[str] | None = Field(None, max_length=64)
+
+
+class InstallForm(BaseModel):
+    deps: list[str] = Field(default_factory=list, max_length=16)
+    packages: list[str] = Field(default_factory=list, max_length=64)
 
 
 class FolderForm(BaseModel):
@@ -158,11 +168,21 @@ async def install_key(form: InstallKeyForm, user=Depends(get_admin_user)):
 async def create_machine(request: Request, form: CreateForm, user=Depends(get_admin_user)):
     try:
         version = managed.requested_version(form.version)
+        managed.install_args(form.deps, form.packages)
     except MachineError as error:
         _ssh_fail(error)
     target = form.model_dump(include={'host', 'port', 'username', 'host_key'})
     _ssh_start(
-        managed.provision(request, form.id, user.id, name=form.name or form.host, target=target, version=version)
+        managed.provision(
+            request,
+            form.id,
+            user.id,
+            name=form.name or form.host,
+            target=target,
+            version=version,
+            deps=form.deps,
+            packages=form.packages,
+        )
     )
     return {'id': form.id, 'status': 'installing'}
 
@@ -204,9 +224,32 @@ async def upgrade_machine(
     try:
         await managed.get_machine(machine_id)
         version = managed.requested_version(form.version) if form and form.version is not None else None
+        managed.install_args(form.deps if form else None, form.packages if form else None)
     except MachineError as error:
         _ssh_fail(error)
-    _ssh_start(managed.provision(request, machine_id, user.id, version=version))
+    _ssh_start(
+        managed.provision(
+            request,
+            machine_id,
+            user.id,
+            version=version,
+            deps=form.deps if form else None,
+            packages=form.packages if form else None,
+        )
+    )
+    return {'id': machine_id, 'status': 'installing'}
+
+
+@router.post('/managed/{machine_id}/install')
+async def install_machine_packages(request: Request, machine_id: str, form: InstallForm, user=Depends(get_admin_user)):
+    """Install system packages on the machine through `open-terminal install-deps`. Needs passwordless sudo."""
+    try:
+        await managed.get_machine(machine_id)
+        if not managed.install_args(form.deps, form.packages):
+            raise MachineError('Enter what to install.')
+    except MachineError as error:
+        _ssh_fail(error)
+    _ssh_start(managed.install(request, machine_id, user.id, form.deps, form.packages))
     return {'id': machine_id, 'status': 'installing'}
 
 
@@ -370,7 +413,7 @@ async def browser_http(request: Request, server_id: str, sid: str, browser_token
         path = f'files/serve/{file_path}'
     else:
         path = f'browser/view/{sid}/{data["capability"]}/{path}'
-    return await _proxy_terminal(
+    return await _proxy_machine(
         server_id,
         path,
         request,
@@ -407,7 +450,7 @@ async def watch_access(server_id, sid, browser_token, request):
     while True:
         await asyncio.sleep(10)
         current_user, data = await browser_access(server_id, sid, browser_token)
-        current = await find_terminal_connection(current_user, server_id, browser_context(data), request=request)
+        current = await find_machine_connection(current_user, server_id, browser_context(data), request=request)
         if not current:
             return
 
@@ -416,7 +459,7 @@ async def watch_access(server_id, sid, browser_token, request):
 async def browser_ws(ws: WebSocket, server_id: str, sid: str, browser_token: str, kind: str):
     try:
         user, data = await browser_access(server_id, sid, browser_token)
-        connection = await find_terminal_connection(user, server_id, browser_context(data), request=ws)
+        connection = await find_machine_connection(user, server_id, browser_context(data), request=ws)
         if (
             kind not in ('ws', 'stream', 'vnc')
             or data.get('resource') == 'files'
@@ -429,9 +472,9 @@ async def browser_ws(ws: WebSocket, server_id: str, sid: str, browser_token: str
         await ws.close(code=4001)
         return
     await ws.accept()
-    base = get_terminal_server_url(connection).replace('https://', 'wss://').replace('http://', 'ws://')
+    base = get_machine_url(connection).replace('https://', 'wss://').replace('http://', 'ws://')
     url = f'{base}/browser/view/{sid}/{quote(data["capability"], safe="")}/{kind}'
-    headers = {'X-User-Id': user.id, 'X-Session-Id': chat, **terminal_headers(connection)}
+    headers = {'X-User-Id': user.id, 'X-Session-Id': chat, **machine_headers(connection)}
     if data['relay'].get('authorization'):
         headers['Authorization'] = data['relay']['authorization']
     tasks = []
@@ -468,12 +511,12 @@ async def browser_ws(ws: WebSocket, server_id: str, sid: str, browser_token: str
 
 
 @router.get('/')
-async def list_terminal_servers(request: Request, user=Depends(get_verified_user)):
+async def list_machines(request: Request, user=Depends(get_verified_user)):
     """Return terminal servers the authenticated user has access to."""
     if not ENABLE_TOOL_SERVERS:
         return []
 
-    connections = await get_terminal_connections(user)
+    connections = await get_machine_connections(user)
     user_group_ids = {group.id for group in await Groups.get_groups_by_member_id(user.id, include_inherited=True)}
 
     return [
@@ -483,7 +526,7 @@ async def list_terminal_servers(request: Request, user=Depends(get_verified_user
             'name': connection.get('name', ''),
             'template_id': connection.get('template_id'),
             'scope': connection.get('scope'),
-            'config': {'chat_uploads': terminal_chat_uploads(connection)},
+            'config': {'chat_uploads': machine_chat_uploads(connection)},
         }
         for connection in connections
         if connection.get('enabled', True)
@@ -497,13 +540,13 @@ PROXY_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 @router.api_route('/{server_id}/{path:path}', methods=PROXY_METHODS)
 # Register the chat route before the catch-all.
 @router.api_route('/{server_id}/chats/{chat_id}/{path:path}', methods=PROXY_METHODS)
-async def proxy_terminal(
+async def proxy_machine(
     server_id: str,
     path: str,
     request: Request,
     user=Depends(get_verified_user),
 ):
-    return await _proxy_terminal(
+    return await _proxy_machine(
         server_id,
         path,
         request,
@@ -516,18 +559,18 @@ async def proxy_terminal(
     )
 
 
-async def _proxy_terminal(server_id, path, request, user, *, context, browser_auth=None):
+async def _proxy_machine(server_id, path, request, user, *, context, browser_auth=None):
     if not ENABLE_TOOL_SERVERS:
         return JSONResponse({'error': 'Tool servers are disabled'}, status_code=403)
 
-    connection = await find_terminal_connection(user, server_id, context, request=request)
+    connection = await find_machine_connection(user, server_id, context, request=request)
 
     if connection is None:
-        return JSONResponse({'error': f"Terminal server '{server_id}' not found"}, status_code=404)
+        return JSONResponse({'error': f"Machine '{server_id}' not found"}, status_code=404)
 
-    base_url = get_terminal_server_url(connection)
+    base_url = get_machine_url(connection)
     if not base_url:
-        return JSONResponse({'error': 'Terminal server URL not configured'}, status_code=503)
+        return JSONResponse({'error': 'Machine URL not configured'}, status_code=503)
 
     safe_path = _sanitize_proxy_path(path)
     if safe_path is None:
@@ -590,7 +633,7 @@ async def _proxy_terminal(server_id, path, request, user, *, context, browser_au
             if value := request.headers.get(name):
                 headers[name] = value
 
-    headers.update(terminal_headers(connection))
+    headers.update(machine_headers(connection))
     content_type = request.headers.get('content-type')
     if content_type:
         headers['Content-Type'] = content_type
@@ -633,13 +676,13 @@ async def _proxy_terminal(server_id, path, request, user, *, context, browser_au
 
         upstream_content_type = upstream_response.headers.get('content-type', '')
         # Case-insensitive and multi-valued, like the upstream headers: admin headers replace the
-        # terminal's whatever their case, and repeated headers such as Set-Cookie all survive.
+        # machine's whatever their case, and repeated headers such as Set-Cookie all survive.
         filtered_headers = CIMultiDict(
             (key, value)
             for key, value in upstream_response.headers.items()
             if key.lower() not in STRIPPED_RESPONSE_HEADERS
         )
-        filtered_headers.update(TERMINAL_PROXY_HEADERS)
+        filtered_headers.update(MACHINE_PROXY_HEADERS)
 
         port_match = re.match(r'^proxy/(\d+)/', safe_path)
         port_prefix = None
@@ -707,11 +750,11 @@ async def _proxy_terminal(server_id, path, request, user, *, context, browser_au
     except (aiohttp.ClientConnectionError, TimeoutError) as error:
         await session.close()
         log.error('Terminal proxy error: %s', str(error) or type(error).__name__)
-        return JSONResponse({'error': f'Terminal proxy error: {error}'}, status_code=502)
+        return JSONResponse({'error': f'Machine proxy error: {error}'}, status_code=502)
     except Exception as error:
         await session.close()
         log.exception('Terminal proxy error: %s', error)
-        return JSONResponse({'error': f'Terminal proxy error: {error}'}, status_code=502)
+        return JSONResponse({'error': f'Machine proxy error: {error}'}, status_code=502)
 
 
 # WebSocket proxy for interactive terminal sessions
@@ -744,7 +787,7 @@ async def _resolve_authenticated_connection(ws: WebSocket, server_id: str):
         return None
 
     ws.state.auth = payload
-    result = await _resolve_terminal_access(ws, server_id, token)
+    result = await _resolve_machine_access(ws, server_id, token)
     if result is None:
         return None
     user, connection = result
@@ -752,7 +795,7 @@ async def _resolve_authenticated_connection(ws: WebSocket, server_id: str):
     return user, connection, chat_id if isinstance(chat_id, str) else '', token
 
 
-async def _resolve_terminal_access(ws: WebSocket, server_id: str, token: str):
+async def _resolve_machine_access(ws: WebSocket, server_id: str, token: str):
     """Resolve current access for both the handshake and an open terminal session."""
     if not ENABLE_TOOL_SERVERS:
         await ws.close(code=4003, reason='Tool servers are disabled')
@@ -767,9 +810,9 @@ async def _resolve_terminal_access(ws: WebSocket, server_id: str, token: str):
         await ws.close(code=4001, reason='Invalid token')
         return None
 
-    # Resolve terminal server
+    # Resolve the machine
     try:
-        connection = await find_terminal_connection(user, server_id, socket_metadata(ws), request=ws)
+        connection = await find_machine_connection(user, server_id, socket_metadata(ws), request=ws)
     except HTTPException as exc:
         await ws.close(code=4003, reason=str(exc.detail))
         return None
@@ -778,7 +821,7 @@ async def _resolve_terminal_access(ws: WebSocket, server_id: str, token: str):
         if server_id.startswith('tether:'):
             await ws.close(code=1013, reason='Tether is offline. Reconnecting.')
         else:
-            await ws.close(code=4004, reason='Terminal server not found')
+            await ws.close(code=4004, reason='Machine not found')
         return None
 
     return user, connection
@@ -835,9 +878,9 @@ async def _proxy_terminal_websocket(
         return
     user, connection, chat_id, token = result
 
-    base_url = get_terminal_server_url(connection)
+    base_url = get_machine_url(connection)
     if not base_url:
-        await ws.close(code=4003, reason='Terminal server URL not configured')
+        await ws.close(code=4003, reason='Machine URL not configured')
         return
 
     # Build upstream WebSocket URL (no token in URL)
@@ -850,7 +893,7 @@ async def _proxy_terminal_websocket(
         for key in ('offset', 'tail'):
             if key in ws.query_params:
                 upstream_params[key] = ws.query_params[key]
-    upstream_headers = {'X-User-Id': user.id, 'X-Session-Id': chat_id, **terminal_headers(connection)}
+    upstream_headers = {'X-User-Id': user.id, 'X-Session-Id': chat_id, **machine_headers(connection)}
     import urllib.parse
 
     # Encode session_id as an opaque path segment so it cannot smuggle '?'/'#'/'&' (at any
@@ -875,7 +918,7 @@ async def _proxy_terminal_websocket(
         ) as upstream:
             import json as _json
 
-            # First-message auth to upstream terminal server
+            # First-message auth to the machine's Open Terminal
             auth_type = connection.get('auth_type', 'bearer')
             if auth_type == 'bearer':
                 key = normalize_bearer_token(connection.get('key', ''))
@@ -933,7 +976,7 @@ async def _proxy_terminal_websocket(
                     while True:
                         # Poll current state so revocation also works across workers.
                         await asyncio.sleep(10)
-                        if await _resolve_terminal_access(ws, server_id, token) is None:
+                        if await _resolve_machine_access(ws, server_id, token) is None:
                             return
                 except Exception:
                     log.exception('Terminal access recheck failed')

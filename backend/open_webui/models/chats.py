@@ -918,6 +918,8 @@ class ChatTable:
 
                 stored = chat_item.chat or {}
                 updated = {**stored, **chat}
+                if 'machine_id' in chat:
+                    updated.pop('terminal_id', None)  # former name; would otherwise linger in the merge
                 if 'history' in chat:
                     # The caller built its history from an earlier read; merge so messages saved since then survive.
                     updated['history'] = self.merge_history(stored.get('history'), chat['history'])
@@ -1381,7 +1383,7 @@ class ChatTable:
             history = (chat.chat or {}).get('history') or {'messages': {}, 'currentId': None}
             messages = history.get('messages') or {}
             user_message_id = user_message.get('id')
-            assistant_ids = [entry.get('message_id') for entry in message_ids]
+            assistant_ids = [assistant_message.get('message_id') for assistant_message in message_ids]
             ids = [user_message_id, *assistant_ids] if user_message else assistant_ids
             if not all(isinstance(mid, str) and mid for mid in ids) or len(set(ids)) != len(ids):
                 raise HTTPException(409, 'Message already exists or has an invalid ID.')
@@ -1426,8 +1428,8 @@ class ChatTable:
                 turn[user_message_id] = self.upsert_message_to_history(
                     history, user_message_id, self._clean_null_bytes(message)
                 )
-            for entry in message_ids:
-                mid = entry['message_id']
+            for assistant_message in message_ids:
+                mid = assistant_message['message_id']
                 turn[mid] = self.upsert_message_to_history(
                     history,
                     mid,
@@ -1438,10 +1440,12 @@ class ChatTable:
                         'role': 'assistant',
                         'content': '',
                         'done': False,
-                        'model': entry['model_id'],
-                        'modelIdx': entry.get('modelIdx'),
+                        'model': assistant_message['model_id'],
+                        'modelIdx': assistant_message.get('modelIdx'),
                         'timestamp': int(time.time()),
                         'user_id': user.id,
+                        'meta': assistant_message['meta'],
+                        **({'modelName': assistant_message['modelName']} if assistant_message['modelName'] else {}),
                     },
                 )
             chat.chat = {**(chat.chat or {}), 'history': history}
@@ -2010,6 +2014,17 @@ class ChatTable:
         except Exception:
             return None
 
+    async def get_chat_without_history_by_id(self, id: str) -> tuple[str, str, dict, str | None, str | None] | None:
+        """Return (id, user_id, meta, folder_id, current_message_id) for a chat, without its history."""
+        try:
+            async with get_async_db_context() as session:
+                result = await session.execute(
+                    select(Chat.id, Chat.user_id, Chat.meta, Chat.folder_id, Chat.current_message_id).filter_by(id=id)
+                )
+                return result.first()
+        except Exception:
+            return None
+
     async def get_chat_by_share_id(self, id: str, db: AsyncSession | None = None) -> ChatModel | None:
         """Look up a shared chat snapshot by its share token."""
         from open_webui.models.shared_chats import SharedChats
@@ -2108,6 +2123,19 @@ class ChatTable:
                 folder
                 and (permission == 'read' or (folder.data or {}).get('share_mode') == 'continue')
                 and await has_folder_access(user.id, folder, 'read', db)
+            ):
+                return True
+        # A run chat is readable by anyone the automation is shared with.
+        automation_id = (chat.meta or {}).get('automation_id')
+        if automation_id and permission == 'read':
+            from open_webui.models.automations import Automations
+            from open_webui.utils.access_control.automations import has_automation_access
+
+            automation = await Automations.get_by_id(automation_id, db=db)
+            if (
+                automation
+                and automation.user_id == chat.user_id
+                and await has_automation_access(user, automation, 'read', db=db)
             ):
                 return True
         return False

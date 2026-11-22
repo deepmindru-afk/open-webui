@@ -24,14 +24,16 @@
 		folders,
 		mobile,
 		showSidebar,
+		user,
 		type AgentModel
 	} from '$lib/stores';
-	import { getTerminalServers, type TerminalServer } from '$lib/apis/machines';
+	import { getMachines, type MachineServer } from '$lib/apis/machines';
 	import { getFolders } from '$lib/apis/folders';
 	import { getChannels } from '$lib/apis/channels';
 
 	import {
 		getAutomationById,
+		updateAutomationAccessGrants,
 		toggleAutomationById,
 		runAutomationById,
 		deleteAutomationById,
@@ -62,7 +64,7 @@
 	import ScheduleDropdown from '$lib/components/automations/ScheduleDropdown.svelte';
 	import ModelDropdown from '$lib/components/automations/ModelDropdown.svelte';
 	import DestinationDropdown from '$lib/components/automations/DestinationDropdown.svelte';
-	import TerminalDropdown from '$lib/components/automations/TerminalDropdown.svelte';
+	import MachineDropdown from '$lib/components/automations/MachineDropdown.svelte';
 	import Check from '$lib/components/icons/Check.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
@@ -70,6 +72,7 @@
 	import LinkIcon from '$lib/components/icons/Link.svelte';
 	import WebhookDropdown from '$lib/components/automations/WebhookDropdown.svelte';
 	import InputVariablesModal from '$lib/components/chat/MessageInput/InputVariablesModal.svelte';
+	import AccessControlModal from '$lib/components/workspace/common/AccessControlModal.svelte';
 
 	dayjs.extend(localizedFormat);
 
@@ -79,6 +82,15 @@
 	export let automation: AutomationResponse;
 
 	let is_active = automation.is_active;
+
+	// Every run uses the owner's account, so only the owner changes what it does. Anyone it's
+	// shared with for editing renames, reschedules, pauses and runs it; viewers only look.
+	$: canEdit = automation.user_id === $user?.id;
+	$: canManage = canEdit || !!automation.write_access;
+	$: canShare = canEdit || $user?.role === 'admin';
+	let showAccessControlModal = false;
+	let accessGrants: any[] = [];
+	$: accessGrants = automation.access_grants ?? [];
 
 	let loading = false;
 	let showDeleteConfirm = false;
@@ -112,9 +124,9 @@
 	let channel_id = '';
 	let start_new = true;
 	let reply_in_thread = true;
-	let terminalServerId = '';
-	let terminalCwd = '';
-	let terminalServers: TerminalServer[] = [];
+	let machineServerId = '';
+	let machineCwd = '';
+	let machines: MachineServer[] = [];
 	let agentModels: AgentModel[] = [];
 	let scheduleDropdown: ScheduleDropdown;
 	let scheduleTick = 0;
@@ -136,8 +148,8 @@
 		channel_id = source.data.target?.channel_id ?? '';
 		start_new = startsNew(source.data.target);
 		reply_in_thread = repliesInThread(source.data.target);
-		terminalServerId = source.data.terminal?.server_id ?? '';
-		terminalCwd = source.data.terminal?.cwd ?? '';
+		machineServerId = automationMachineOf(source.data)?.server_id ?? '';
+		machineCwd = automationMachineOf(source.data)?.cwd ?? '';
 		webhookEnabled = !!source.data.webhook;
 		webhookAllowGet = !!source.data.webhook?.allow_get;
 		await tick();
@@ -158,23 +170,24 @@
 			channel_id !== (automation.data.target?.channel_id ?? '') ||
 			start_new !== startsNew(automation.data.target) ||
 			reply_in_thread !== repliesInThread(automation.data.target) ||
-			terminalServerId !== (automation.data.terminal?.server_id ?? '') ||
-			terminalCwd.trim() !== (automation.data.terminal?.cwd ?? '') ||
+			machineServerId !== (automationMachineOf(automation.data)?.server_id ?? '') ||
+			machineCwd.trim() !== (automationMachineOf(automation.data)?.cwd ?? '') ||
 			rruleNow(scheduleTick) !== savedRrule ||
 			webhookEnabled !== !!automation.data.webhook ||
 			(webhookEnabled && webhookAllowGet !== !!automation.data.webhook?.allow_get));
 
-	// Agent models depend on the chosen terminal, as in the automation modal.
+	// Agent models depend on the chosen machine, as in the automation modal.
 	let modelRequest = 0;
-	$: void loadAgentModels(terminalServerId, terminalCwd, target_type);
-	async function loadAgentModels(terminalId: string, cwd: string, target: string) {
+	$: void loadAgentModels(machineServerId, machineCwd, target_type);
+	async function loadAgentModels(machineId: string, cwd: string, target: string) {
 		const request = ++modelRequest;
 		agentModels = [];
-		if (!terminalId || target !== 'chat') return;
+		// Only the owner picks the model, through the owner's machine.
+		if (!machineId || target !== 'chat' || automation.user_id !== $user?.id) return;
 		try {
 			const available = await getAutomationModels(
 				localStorage.token,
-				terminalId,
+				machineId,
 				cwd.trim(),
 				automation.id
 			);
@@ -209,8 +222,8 @@
 					// An untouched schedule keeps its stored start date.
 					rrule: rrule === savedRrule ? automation.data.rrule : rrule,
 					webhook: webhookEnabled ? { allow_get: webhookAllowGet } : null,
-					terminal: terminalServerId
-						? { server_id: terminalServerId, cwd: terminalCwd.trim() || undefined }
+					machine: machineServerId
+						? { server_id: machineServerId, cwd: machineCwd.trim() || undefined }
 						: undefined,
 					target:
 						target_type === 'channel'
@@ -350,7 +363,8 @@
 	const runNowHandler = async () => {
 		if (loading) return;
 		runVariables = getRunVariables(automation.data.prompt);
-		if (Object.keys(runVariables).length > 0) {
+		// Variables are written into the owner's prompt; others run it with the defaults.
+		if (Object.keys(runVariables).length > 0 && canEdit) {
 			showVariablesModal = true;
 			return;
 		}
@@ -462,11 +476,12 @@
 		showPrompt = !prompt.trim();
 		await ensureFolders();
 		await ensureChannels();
-		terminalServers = await getTerminalServers(localStorage.token).catch(() => []);
+		machines = await getMachines(localStorage.token).catch(() => []);
 		await loadRuns();
 	});
 
 	import PageTitle from '$lib/components/common/PageTitle.svelte';
+	import { automationMachineOf } from '$lib/utils/machines';
 
 	const rowClass =
 		'flex h-7 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-base-50 dark:hover:bg-base-850/50';
@@ -496,6 +511,32 @@
 	title={$i18n.t('Run {{name}}', { name: automation.name })}
 	onSave={(values) => run(values)}
 />
+
+{#if canShare}
+	<AccessControlModal
+		bind:show={showAccessControlModal}
+		bind:accessGrants
+		accessRoles={['read', 'write']}
+		share={$user?.permissions?.sharing?.automations || $user?.role === 'admin'}
+		sharePublic={false}
+		shareUsers={($user?.permissions?.access_grants?.allow_users ?? true) || $user?.role === 'admin'}
+		allowGroups={($user?.permissions?.access_grants?.allow_groups ?? true) ||
+			$user?.role === 'admin'}
+		onChange={async () => {
+			try {
+				automation = await updateAutomationAccessGrants(
+					localStorage.token,
+					automation.id,
+					accessGrants
+				);
+				toast.success($i18n.t('Saved'));
+			} catch (error) {
+				accessGrants = automation.access_grants ?? [];
+				toast.error(`${error}`);
+			}
+		}}
+	/>
+{/if}
 
 <AutomationModal
 	bind:show={showCloneModal}
@@ -528,6 +569,7 @@
 				<input
 					class="min-w-0 flex-1 bg-transparent text-[0.9375rem] font-normal text-base-800 outline-hidden placeholder:text-base-400 dark:text-base-200 dark:placeholder:text-base-500"
 					bind:value={name}
+					readonly={!canManage}
 					aria-label={$i18n.t('Name')}
 					placeholder={$i18n.t('Automation name')}
 				/>
@@ -535,13 +577,22 @@
 					{loading}
 					{dirty}
 					{saving}
-					{runNowHandler}
+					runNowHandler={canManage ? runNowHandler : null}
 					{copyLinkHandler}
 					{saveHandler}
 					duplicateHandler={() => (showCloneModal = true)}
-					deleteHandler={() => (showDeleteConfirm = true)}
+					shareHandler={canShare ? () => (showAccessControlModal = true) : null}
+					deleteHandler={canShare ? () => (showDeleteConfirm = true) : null}
 				/>
 			</div>
+			{#if !canEdit}
+				<div class="mt-0.5 text-[0.6875rem] text-base-400 dark:text-base-500">
+					{$i18n.t('Shared by {{name}}', {
+						name: automation.user?.name ?? $i18n.t('Deleted User')
+					})}
+					· {canManage ? $i18n.t('Write') : $i18n.t('Read')}
+				</div>
+			{/if}
 			<div class="relative">
 				<div
 					bind:this={promptMeasureEl}
@@ -555,6 +606,7 @@
 				<Textarea
 					className="mt-1 w-full resize-none overflow-hidden bg-transparent text-xs font-normal leading-relaxed text-base-500 outline-hidden placeholder:text-base-400 dark:text-base-400 dark:placeholder:text-base-500"
 					bind:value={prompt}
+					readonly={!canEdit}
 					rows={1}
 					ariaLabel={$i18n.t('Instructions')}
 					placeholder={$i18n.t('Enter prompt here.')}
@@ -603,6 +655,7 @@
 					>
 					<Switch
 						state={is_active}
+						disabled={!canManage}
 						on:change={toggleHandler}
 						ariaLabel={is_active ? $i18n.t('Active') : $i18n.t('Paused')}
 					/>
@@ -612,7 +665,7 @@
 					<span class={labelClass}
 						><Calendar className="size-3 shrink-0" />{$i18n.t('Schedule')}</span
 					>
-					<div class="min-w-0 flex-1">
+					<div class="min-w-0 flex-1" inert={!canManage || undefined}>
 						<ScheduleDropdown
 							bind:this={scheduleDropdown}
 							allowNone={webhookEnabled}
@@ -629,7 +682,7 @@
 						<span class={labelClass}
 							><LinkIcon className="size-3 shrink-0" />{$i18n.t('Webhook')}</span
 						>
-						<div class="min-w-0 flex-1">
+						<div class="min-w-0 flex-1" inert={!canEdit || undefined}>
 							<WebhookDropdown
 								bind:enabled={webhookEnabled}
 								bind:allowGet={webhookAllowGet}
@@ -645,7 +698,7 @@
 
 				<div class={rowClass}>
 					<span class={labelClass}><Sparkles className="size-3 shrink-0" />{$i18n.t('Model')}</span>
-					<div class="min-w-0 flex-1">
+					<div class="min-w-0 flex-1" inert={!canEdit || undefined}>
 						<ModelDropdown
 							bind:model_id
 							items={[...$baseModels, ...agentModels]}
@@ -660,7 +713,7 @@
 					<span class={labelClass}
 						><Folder className="size-3 shrink-0" />{$i18n.t('Destination')}</span
 					>
-					<div class="min-w-0 flex-1">
+					<div class="min-w-0 flex-1" inert={!canEdit || undefined}>
 						<DestinationDropdown
 							bind:target_type
 							bind:channel_id
@@ -680,11 +733,11 @@
 					<span class={labelClass}
 						><Icon name="terminal" size={12} class="shrink-0" />{$i18n.t('Machine')}</span
 					>
-					<div class="min-w-0 flex-1">
-						<TerminalDropdown
-							{terminalServers}
-							bind:terminalServerId
-							bind:terminalCwd
+					<div class="min-w-0 flex-1" inert={!canEdit || undefined}>
+						<MachineDropdown
+							{machines}
+							bind:machineServerId
+							bind:machineCwd
 							plain
 							side="bottom"
 							align="start"

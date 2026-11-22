@@ -8,7 +8,6 @@ import json
 import logging
 import mimetypes
 import os
-import random
 import re
 import sys
 import textwrap
@@ -21,6 +20,7 @@ from uuid import uuid4
 from aiocache import cached
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from open_webui.utils.machines import is_machine_ref, machine_id_of, strip_machine_prefix
 from open_webui.config import (
     CACHE_DIR,
     CODE_INTERPRETER_BLOCKED_MODULES,
@@ -136,17 +136,20 @@ from open_webui.utils.misc import (
     set_last_user_message_content,
     strip_empty_content_blocks,
 )
+from open_webui.utils.models import check_model_access
 from open_webui.utils.oauth import get_system_oauth_token
 from open_webui.utils.payload import apply_params_to_form_data, apply_system_prompt_to_body
 from open_webui.utils.plugin import load_function_module_by_id
 from open_webui.utils.response import (
     convert_responses_stream_to_chat_completions,
     get_response_delta_key,
+    get_response_usage,
     handle_responses_streaming_event,
     merge_usage,
     normalize_usage,
     update_usage_snapshot,
 )
+from open_webui.utils.router_models import resolve_router_model
 from open_webui.utils.sanitize import sanitize_code
 from open_webui.utils.skills import (
     apply_skills_create_prompt,
@@ -161,7 +164,7 @@ from open_webui.utils.task import (
     rag_template,
     tools_function_calling_generation_template,
 )
-from open_webui.utils.machines import filter_user_terminal_tools, upload_files_to_terminal
+from open_webui.utils.machines import filter_user_terminal_tools, upload_files_to_machine
 from open_webui.utils.tool_approval import complete_tool_call, pending_tool_calls
 from open_webui.utils.tool_permissions import (
     ToolApprovalRequired,
@@ -186,7 +189,7 @@ from open_webui.utils.tools import (
     get_attached_knowledge,
     get_builtin_tool_spec,
     get_builtin_tools,
-    get_terminal_tools,
+    get_machine_tools,
     get_tools,
     get_updated_tool_function,
     is_file_context_enabled,
@@ -343,7 +346,7 @@ def output_id(prefix: str) -> str:
     return f'{prefix}_{uuid4().hex[:24]}'
 
 
-def build_terminal_file_tool_result(
+def build_machine_file_tool_result(
     tool_function_name: str,
     tool_function_params: dict,
     tool_result: Any,
@@ -357,14 +360,14 @@ def build_terminal_file_tool_result(
         return None
 
     tool_id = (tool or {}).get('tool_id', '')
-    terminal_id = metadata.get('terminal_id') if metadata else None
-    if isinstance(tool_id, str) and tool_id.startswith('terminal:'):
-        terminal_id = tool_id.split(':', 1)[1]
+    machine_id = metadata.get('machine_id') if metadata else None
+    if is_machine_ref(tool_id):
+        machine_id = strip_machine_prefix(tool_id)
 
     server_url = ((tool or {}).get('server') or {}).get('url')
-    terminal_selector = terminal_id or server_url
+    machine_selector = machine_id or server_url
     path = tool_result.get('path') or tool_function_params.get('path')
-    if not terminal_selector or not path:
+    if not machine_selector or not path:
         return None
     mime_type, _ = mimetypes.guess_type(path)
     mime_type = mime_type or 'application/octet-stream'
@@ -376,9 +379,9 @@ def build_terminal_file_tool_result(
         'source': 'open_terminal',
         'exists': True,
         'displayed': tool_function_params.get('inline') is True,
-        'terminal_selector': terminal_selector,
-        **({'terminal_id': terminal_id} if terminal_id else {}),
-        **({'terminal_url': server_url} if server_url and not terminal_id else {}),
+        'machine_selector': machine_selector,
+        **({'machine_id': machine_id} if machine_id else {}),
+        **({'machine_url': server_url} if server_url and not machine_id else {}),
         'session_id': metadata.get('chat_id') if metadata else None,
         'path': path,
         'full_path': tool_result.get('full_path') or path,
@@ -954,7 +957,7 @@ async def process_tool_result(
     return tool_result, tool_result_files, tool_result_embeds
 
 
-def parse_terminal_tool_result(tool_result: Any) -> dict:
+def parse_machine_tool_result(tool_result: Any) -> dict:
     try:
         result = JSONCodec.loads(tool_result)
     except (JSONCodec.JSONDecodeError, TypeError):
@@ -962,17 +965,17 @@ def parse_terminal_tool_result(tool_result: Any) -> dict:
     return result if isinstance(result, dict) else {}
 
 
-async def terminal_event_handler(
+async def machine_event_handler(
     tool_function_name: str,
     tool_function_params: dict,
     tool_result,
     event_emitter,
 ):
-    """Emit terminal:* events for Open Terminal tools.
+    """Emit machine:* events for Open Terminal tools.
 
-    - display_file  → emits 'terminal:display_file' to open the file preview.
-    - write_file / replace_file_content → emits 'terminal:write_file' to refresh.
-    - run_command → emits 'terminal:run_command' with cwd to refresh if relevant.
+    - display_file  → emits 'machine:display_file' to open the file preview.
+    - write_file / replace_file_content → emits 'machine:write_file' to refresh.
+    - run_command → emits 'machine:run_command' with cwd to refresh if relevant.
     """
     if not event_emitter:
         return
@@ -980,7 +983,7 @@ async def terminal_event_handler(
     if tool_function_name == 'display_file':
         if tool_function_params.get('inline') is True:
             return
-        result = parse_terminal_tool_result(tool_result)
+        result = parse_machine_tool_result(tool_result)
         # Open Terminal resolves the argument against the session cwd, so prefer its resolved path
         path = result.get('path') or tool_function_params.get('path', '')
         if not path:
@@ -992,7 +995,7 @@ async def terminal_event_handler(
 
         await event_emitter(
             {
-                'type': f'terminal:{tool_function_name}',
+                'type': f'machine:{tool_function_name}',
                 'data': {
                     'path': path,
                     **({'page': page} if page else {}),
@@ -1000,20 +1003,20 @@ async def terminal_event_handler(
             }
         )
     elif tool_function_name in ('write_file', 'replace_file_content'):
-        result = parse_terminal_tool_result(tool_result)
+        result = parse_machine_tool_result(tool_result)
         path = result.get('path') or tool_function_params.get('path', '')
         if not path:
             return
         await event_emitter(
             {
-                'type': f'terminal:{tool_function_name}',
+                'type': f'machine:{tool_function_name}',
                 'data': {'path': path},
             }
         )
     elif tool_function_name == 'run_command':
         await event_emitter(
             {
-                'type': 'terminal:run_command',
+                'type': 'machine:run_command',
                 'data': {},
             }
         )
@@ -1144,7 +1147,7 @@ async def chat_completion_tools_handler(
                 )
 
                 if event_emitter:
-                    await terminal_event_handler(
+                    await machine_event_handler(
                         tool_function_name,
                         tool_function_params,
                         tool_result,
@@ -1489,7 +1492,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
         'message_id': metadata.get('message_id', None),
         **({'channel_id': chat_id.removeprefix('channel:')} if is_channel_chat else {'chat_id': chat_id}),
     }
-    terminal_metadata = {**metadata, 'terminal_id': form_data.get('terminal_id')}
+    machine_metadata = {**metadata, 'machine_id': machine_id_of(form_data)}
 
     if not is_saved_chat_id(chat_id):
         message_list = form_data.get('messages', [])
@@ -1538,7 +1541,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
                 metadata=image_metadata,
                 user=user,
             )
-            await upload_files_to_terminal(request, user, images, terminal_metadata, extra_params)
+            await upload_files_to_machine(request, user, images, machine_metadata, extra_params)
 
             await __event_emitter__(
                 {
@@ -1563,7 +1566,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
             )
 
             system_message_content = (
-                '<context>The edited images are shown in chat. Use terminal_path with terminal tools or '
+                '<context>The edited images are shown in chat. Use machine_path with machine tools or '
                 f'display_file when available. Images: {JSONCodec.dumps(images)}</context>'
             )
         except Exception as e:
@@ -1650,7 +1653,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
                 metadata=image_metadata,
                 user=user,
             )
-            await upload_files_to_terminal(request, user, images, terminal_metadata, extra_params)
+            await upload_files_to_machine(request, user, images, machine_metadata, extra_params)
 
             await __event_emitter__(
                 {
@@ -1675,7 +1678,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
             )
 
             system_message_content = (
-                '<context>The generated images are shown in chat. Use terminal_path with terminal tools or '
+                '<context>The generated images are shown in chat. Use machine_path with machine tools or '
                 f'display_file when available. Images: {JSONCodec.dumps(images)}</context>'
             )
         except Exception as e:
@@ -1913,6 +1916,7 @@ def get_reasoning_format(model: dict) -> str | None:
         'thinking': Ollama expects reasoning in the native thinking field.
         'think_tags': wrap reasoning in <think> tags inside content.
         'reasoning_content': llama.cpp supports reasoning_content as a top-level field.
+        'reasoning': vLLM and OpenRouter accept reasoning as a top-level field.
         None: skip reasoning (safe default for strict providers).
     """
     provider = model.get('provider', '')
@@ -1920,6 +1924,8 @@ def get_reasoning_format(model: dict) -> str | None:
         return 'thinking'
     if provider == 'llama.cpp':
         return 'reasoning_content'
+    if provider in ('vllm', 'openrouter'):
+        return 'reasoning'
     return None
 
 
@@ -2046,34 +2052,27 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
 
-    # Arena model resolution — pick the sub-model now so all downstream
+    # Router model resolution: pick the target model now so all downstream
     # processing (knowledge, capabilities, tools, params) uses its settings
-    # instead of the empty arena wrapper.
-    if model.get('owned_by') == 'arena':
-        arena_model_ids = model.get('info', {}).get('meta', {}).get('model_ids')
-        arena_filter_mode = model.get('info', {}).get('meta', {}).get('filter_mode')
-        if arena_model_ids and arena_filter_mode == 'exclude':
-            arena_model_ids = [
-                available_model['id']
-                for available_model in request.app.state.MODELS.values()
-                if available_model.get('owned_by') != 'arena' and available_model['id'] not in arena_model_ids
-            ]
-
-        if isinstance(arena_model_ids, list) and arena_model_ids:
-            selected_model_id = random.choice(arena_model_ids)
-        else:
-            arena_model_ids = [
-                available_model['id']
-                for available_model in request.app.state.MODELS.values()
-                if available_model.get('owned_by') != 'arena'
-            ]
-            selected_model_id = random.choice(arena_model_ids)
-
+    # instead of the empty router wrapper.
+    if model.get('owned_by') == 'router':
+        routing_form_data = form_data
+        # Saved chats send only the system prompt; route on the stored conversation.
+        if is_saved_chat_id(metadata.get('chat_id')) and metadata.get('user_message_id'):
+            db_messages = await load_messages_from_db(metadata['chat_id'], metadata['user_message_id'])
+            if db_messages:
+                routing_form_data = {**form_data, 'messages': db_messages}
+        selected_model_id, strategy = await resolve_router_model(model['id'], routing_form_data, user)
         selected_model = request.app.state.MODELS.get(selected_model_id)
-        if selected_model:
-            model = selected_model
-            form_data['model'] = selected_model_id
-            metadata['selected_model_id'] = selected_model_id
+        if not selected_model:
+            raise HTTPException(status_code=404, detail='Model not found')
+        if user.role == 'user':
+            await check_model_access(user, selected_model)
+
+        model = selected_model
+        form_data['model'] = selected_model_id
+        metadata['selected_model_id'] = selected_model_id
+        metadata['strategy'] = strategy
 
     payload_tools = form_data.get('tools', None)  # snapshot before filters
     form_data = apply_params_to_form_data(form_data, model)
@@ -2449,14 +2448,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     form_data['messages'] = set_tool_approval_prompt(form_data['messages'])
     tool_ids = form_data.pop('tool_ids', None)
-    terminal_id = form_data.pop('terminal_id', None)
+    machine_id = form_data.pop('machine_id', None)
+    legacy_machine_id = form_data.pop('terminal_id', None)  # former name
+    machine_id = machine_id or legacy_machine_id
     if not ENABLE_TOOL_SERVERS:
-        if terminal_id:
+        if machine_id:
             log.debug('Excluded external plugins disabled by plugin configuration')
-        terminal_id = None
+        machine_id = None
     files = form_data.pop('files', None)
     form_data.pop('folder_id', None)
-    metadata['terminal_id'] = terminal_id
+    metadata['machine_id'] = machine_id
     can_author_skills = (
         use_builtin_tools
         and (model.get('info', {}).get('meta', {}).get('builtinTools') or {}).get('skills', True)
@@ -2508,7 +2509,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if payload_tools is None and await Config.get('skills.lazy_loading.enable', False):
         activated_skill_ids = mentioned_skill_ids
     available_skills = []
-    terminal_skills = []
+    machine_skills = []
 
     model_builtin_tools = model.get('info', {}).get('meta', {}).get('builtinTools') or {}
     skill_tools_enabled = payload_tools is None and use_builtin_tools and model_builtin_tools.get('skills', True)
@@ -2517,15 +2518,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         from open_webui.models.skills import Skills as SkillsModel
         from open_webui.utils.skill_files import format_skill_content, skill_overview
         from open_webui.utils.machines import (
-            format_terminal_skill_context,
-            format_terminal_skill_manifest_entry,
-            get_terminal_json,
-            get_terminal_skill,
+            format_machine_skill_context,
+            format_machine_skill_manifest_entry,
+            get_machine_json,
+            get_machine_skill,
         )
 
-        terminal_skill_prefix = 'terminal:'
-        db_skill_ids = [sid for sid in skill_ids if not sid.startswith(terminal_skill_prefix)]
-        terminal_skill_ids = [sid for sid in skill_ids if sid.startswith(terminal_skill_prefix)]
+        db_skill_ids = [sid for sid in skill_ids if not is_machine_ref(sid)]
+        machine_skill_ids = [sid for sid in skill_ids if is_machine_ref(sid)]
 
         if use_builtin_tools and model_builtin_tools.get('skills', True):
             accessible_skills = {s.id: s for s in await SkillsModel.get_skills(user_id=user.id)}
@@ -2585,27 +2585,27 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 )
 
         listed = (
-            await get_terminal_json(request, user, metadata, '/skills', extra_params)
-            if terminal_id or terminal_skill_ids
+            await get_machine_json(request, user, metadata, '/skills', extra_params)
+            if machine_id or machine_skill_ids
             else None
         )
 
-        listed_terminal_skills = listed if isinstance(listed, list) else []
+        listed_machine_skills = listed if isinstance(listed, list) else []
 
-        if terminal_id and use_builtin_tools and model_builtin_tools.get('skills', True):
-            terminal_skills = listed_terminal_skills
-        elif terminal_skill_ids:
-            terminal_skill_map = {skill['id']: skill for skill in listed_terminal_skills}
-            terminal_skills = [skill for sid in terminal_skill_ids if (skill := terminal_skill_map.get(sid))]
+        if machine_id and use_builtin_tools and model_builtin_tools.get('skills', True):
+            machine_skills = listed_machine_skills
+        elif machine_skill_ids:
+            machine_skill_map = {skill['id']: skill for skill in listed_machine_skills}
+            machine_skills = [skill for sid in machine_skill_ids if (skill := machine_skill_map.get(sid))]
 
-        for skill in sorted(terminal_skills, key=lambda skill: skill['id']):
+        for skill in sorted(machine_skills, key=lambda skill: skill['id']):
             sid = skill['id']
             if skill_tools_enabled:
-                skill_manifest += format_terminal_skill_manifest_entry(skill)
+                skill_manifest += format_machine_skill_manifest_entry(skill)
                 continue
             if sid in activated_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
-                skill_name = unquote(sid.removeprefix(terminal_skill_prefix))
-                loaded = await get_terminal_skill(
+                skill_name = unquote(sid.removeprefix(machine_skill_prefix))
+                loaded = await get_machine_skill(
                     request,
                     user.model_dump(),
                     metadata,
@@ -2616,14 +2616,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 )
                 if loaded:
                     form_data['messages'] = add_or_update_system_message(
-                        format_terminal_skill_context(
+                        format_machine_skill_context(
                             loaded, sid, use_builtin_tools and model_builtin_tools.get('skills', True)
                         ),
                         form_data['messages'],
                         append=True,
                     )
             else:
-                skill_manifest += format_terminal_skill_manifest_entry(skill)
+                skill_manifest += format_machine_skill_manifest_entry(skill)
 
         if skill_tools_enabled and skill_manifest:
             if not metadata.get('assistant_message_id'):
@@ -2636,7 +2636,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             )
 
     # Strip only resolved skill mentions; ordinary text such as Perl's <$fh> stays intact.
-    resolved_skill_ids = {s.id for s in available_skills} | {s['id'] for s in terminal_skills}
+    resolved_skill_ids = {s.id for s in available_skills} | {s['id'] for s in machine_skills}
     chat_context['mentioned_skill_ids'] = sorted(mentioned_skill_ids & resolved_skill_ids)
     strip_skill_mentions(form_data.get('messages', []), resolved_skill_ids)
 
@@ -2644,7 +2644,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     # Supply fallback text for skill-only messages; some providers reject empty content.
     if not prompt or not prompt.strip():
-        fallback = ', '.join([s.name for s in available_skills] + [s['name'] for s in terminal_skills])
+        fallback = ', '.join([s.name for s in available_skills] + [s['name'] for s in machine_skills])
         # Attachment-only messages keep their empty text, same as on models without skills.
         if fallback and not (metadata.get('user_message') or {}).get('files'):
             set_last_user_message_content(fallback, form_data['messages'])
@@ -2664,7 +2664,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             'model_id': form_data.get('model'),
             'tool_ids': tool_ids,
             'skill_ids': skill_ids,
-            'terminal_id': terminal_id,
+            'machine_id': machine_id,
             'files': files,
             'features': features,
         }
@@ -2770,41 +2770,41 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if mcp_tools_dict:
                 tools_dict = {**tools_dict, **mcp_tools_dict}
 
-        # Resolve terminal tools if terminal_id is set (outside tool_ids check
-        # so system terminals work even when no other tools are selected).
-        # get_terminal_tools does the access check, including a shared chat's owner pick.
-        terminal_capability = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('terminal', True)
-        if terminal_id and terminal_capability:
+        # Resolve machine tools if machine_id is set (outside tool_ids check
+        # so system machines work even when no other tools are selected).
+        # get_machine_tools does the access check, including a shared chat's owner pick.
+        machine_capability = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('terminal', True)
+        if machine_id and machine_capability:
             try:
-                terminal_result = await get_terminal_tools(
+                machine_result = await get_machine_tools(
                     request,
-                    terminal_id,
+                    machine_id,
                     user,
                     extra_params,
                 )
-                if isinstance(terminal_result, tuple):
-                    terminal_tools, terminal_system_prompt = terminal_result
+                if isinstance(machine_result, tuple):
+                    machine_tools, machine_system_prompt = machine_result
                 else:
-                    terminal_tools = terminal_result
-                    terminal_system_prompt = None
-                if terminal_tools:
-                    tools_dict = {**tools_dict, **terminal_tools}
-                if terminal_system_prompt:
+                    machine_tools = machine_result
+                    machine_system_prompt = None
+                if machine_tools:
+                    tools_dict = {**tools_dict, **machine_tools}
+                if machine_system_prompt:
                     form_data['messages'] = add_or_update_system_message(
-                        terminal_system_prompt,
+                        machine_system_prompt,
                         form_data['messages'],
                         append=True,
                     )
             except Exception as e:
                 log.exception(e)
-                raise HTTPException(status_code=503, detail=f'Terminal unavailable: {e}') from e
+                raise HTTPException(status_code=503, detail=f'Machine unavailable: {e}') from e
 
-        if terminal_id and terminal_capability:
-            from open_webui.utils.machines import add_terminal_agents_md, get_terminal_agents_md
+        if machine_id and machine_capability:
+            from open_webui.utils.machines import add_machine_agents_md, get_machine_agents_md
 
-            agents_md = await get_terminal_agents_md(request, user, metadata, extra_params)
+            agents_md = await get_machine_agents_md(request, user, metadata, extra_params)
             if agents_md:
-                form_data['messages'] = add_terminal_agents_md(form_data['messages'], agents_md)
+                form_data['messages'] = add_machine_agents_md(form_data['messages'], agents_md)
 
         if mcp_clients:
             metadata['mcp_clients'] = mcp_clients
@@ -3323,11 +3323,11 @@ async def resume_tool_calls(request, form_data, user, model, metadata, message) 
                 )
             elif tool:
                 name = item.get('name', '')
-                terminal_file_result = build_terminal_file_tool_result(name, params, result, tool, metadata)
-                if terminal_file_result:
-                    result = terminal_file_result
+                machine_file_result = build_machine_file_tool_result(name, params, result, tool, metadata)
+                if machine_file_result:
+                    result = machine_file_result
                 result, files, embeds = await process_tool_result(request, name, result, tool_type, metadata, user)
-                await terminal_event_handler(name, params, result, event_emitter)
+                await machine_event_handler(name, params, result, event_emitter)
             content = await tool_result_with_citations(
                 item.get('name', ''),
                 params,
@@ -3445,7 +3445,7 @@ async def pause_for_tool_approval(chat_id: str, message_id: str, output: list[di
                 'session_id': metadata.get('session_id'),
                 'tool_ids': metadata.get('tool_ids') or [],
                 'skill_ids': metadata.get('skill_ids') or [],
-                'terminal_id': metadata.get('terminal_id'),
+                'machine_id': metadata.get('machine_id'),
                 'filter_ids': metadata.get('filter_ids') or [],
                 'features': metadata.get('features') or {},
                 'variables': metadata.get('variables') or {},
@@ -4048,15 +4048,12 @@ async def non_streaming_chat_response_handler(response, ctx):
     if response_data is None:
         return response
 
-    usage = response_data.get('usage') or {}
-    timings = response_data.get('timings') or {}
-    if isinstance(usage, dict) and isinstance(timings, dict):
-        log_model_usage(
-            request,
-            user,
-            response_data.get('selected_model_id') or ctx['form_data']['model'],
-            {**usage, **timings},
-        )
+    log_model_usage(
+        request,
+        user,
+        response_data.get('selected_model_id') or ctx['form_data']['model'],
+        get_response_usage(response_data),
+    )
 
     chat_id = metadata.get('chat_id') or ''
     save_to_chat = is_saved_chat_id(chat_id)
@@ -4098,6 +4095,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                     metadata['message_id'],
                     {
                         'selectedModelId': response_data['selected_model_id'],
+                        'strategy': response_data.get('strategy'),
                     },
                     touch=False,
                 )
@@ -4971,6 +4969,7 @@ async def streaming_chat_response_handler(response, ctx):
                                             metadata['message_id'],
                                             {
                                                 'selectedModelId': form_data['model'],
+                                                'strategy': data.get('strategy'),
                                             },
                                             touch=False,
                                         )
@@ -6011,15 +6010,15 @@ async def streaming_chat_response_handler(response, ctx):
                             )
                             continue
 
-                        terminal_file_result = build_terminal_file_tool_result(
+                        machine_file_result = build_machine_file_tool_result(
                             tool_function_name,
                             tool_function_params,
                             tool_result,
                             tool,
                             metadata,
                         )
-                        if terminal_file_result:
-                            tool_result = terminal_file_result
+                        if machine_file_result:
+                            tool_result = machine_file_result
 
                         tool_result, tool_result_files, tool_result_embeds = await process_tool_result(
                             request,
@@ -6030,7 +6029,7 @@ async def streaming_chat_response_handler(response, ctx):
                             user,
                         )
 
-                        await terminal_event_handler(
+                        await machine_event_handler(
                             tool_function_name,
                             tool_function_params,
                             tool_result,
@@ -6665,10 +6664,7 @@ async def streaming_chat_response_handler(response, ctx):
                                         payload = (
                                             event.get('response') if isinstance(event.get('response'), dict) else event
                                         )
-                                        usage = payload.get('usage') or {}
-                                        timings = payload.get('timings') or {}
-                                        if isinstance(usage, dict) and isinstance(timings, dict) and (usage or timings):
-                                            current_usage = {**usage, **timings}
+                                        current_usage = get_response_usage(payload) or current_usage
                                     if filter_functions:
                                         event, _ = await process_filter_functions(
                                             request=request,

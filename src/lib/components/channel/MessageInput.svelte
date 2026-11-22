@@ -16,8 +16,8 @@
 		config,
 		mobile,
 		settings,
-		selectedTerminalId,
-		terminalSkills,
+		selectedMachineId,
+		machineSkills,
 		socket,
 		user
 	} from '$lib/stores';
@@ -702,13 +702,22 @@
 		} else {
 			processingQueueChannels.add(targetQueueKey);
 			try {
-				await onSubmit({
+				const res = await onSubmit({
 					content: entry.prompt,
 					data: { files: entry.files },
 					channel_id: entry.channel_id,
 					parent_id: entry.parent_id,
 					reply_to_message: entry.reply_to_message
 				});
+				if (!res) {
+					channelRequestQueues.update((q) => ({
+						...q,
+						[targetQueueKey]: [
+							{ ...entry, error: 'Failed to send message' },
+							...(q[targetQueueKey] ?? [])
+						]
+					}));
+				}
 			} finally {
 				processingQueueChannels.delete(targetQueueKey);
 				void processNextInQueue(targetQueueKey);
@@ -772,8 +781,8 @@
 						.run();
 				},
 				render: getSuggestionRenderer(CommandSuggestionList, {
-					selectedTerminalId,
-					terminalSkills,
+					selectedMachineId,
+					machineSkills,
 					i18n,
 					onSelect: (e) => {
 						const { type, data } = e;
@@ -817,8 +826,8 @@
 					editor.chain().focus().deleteRange(range).insertContent(emoji).run();
 				},
 				render: getSuggestionRenderer(CommandSuggestionList, {
-					selectedTerminalId,
-					terminalSkills,
+					selectedMachineId,
+					machineSkills,
 					i18n,
 					onSelect: (e) => {
 						inputRoot?.querySelector<HTMLElement>(`[id="${inputId}"]`)?.focus();

@@ -1472,7 +1472,7 @@ ${content}
 							>
 						</div>
 					{/if}
-					<div class="flex min-h-0 flex-1">
+					<div class="relative flex min-h-0 flex-1">
 						<NotePanel
 							bind:show={showNoteTabs}
 							ariaLabel={$i18n.t('Pages')}
@@ -1603,92 +1603,89 @@ ${content}
 									{/each}
 								</div>
 							</div>
-							{#if note}
-								<!-- The composer keeps its position; expanding only grows the conversation above it. -->
-								<div class="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
-									{#if !noteChatExpanded}
-										<div
-											class="h-6 shrink-0 bg-linear-to-t from-base-0 to-transparent dark:from-base-900"
-										></div>
-									{/if}
+						</div>
+						{#if note}
+							<!-- The composer keeps its position; expanding only grows the conversation above it. -->
+							<!-- Collapsed, it floats over the page on the same fade as the folder composer. -->
+							<!-- It sits on the whole row, so the pages panel doesn't shift it. -->
+							<div
+								class="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col {noteChatExpanded
+									? ''
+									: 'bg-linear-to-t from-base-0 from-40% to-transparent pt-8 dark:from-base-900'}"
+							>
+								<div class="flex justify-center">
+									<!-- Side padding lives on the column so the composer keeps its box in both states. -->
 									<div
-										class="flex justify-center {noteChatExpanded
-											? ''
-											: 'pointer-events-auto bg-base-0 dark:bg-base-900'}"
+										class="pointer-events-auto flex w-full max-w-3xl flex-col rounded-t-3xl border border-b-0 {noteChatExpanded
+											? 'h-[min(60dvh,36rem)] border-base-100/40 bg-base-0 pt-1.5 dark:border-base-800/25 dark:bg-base-900'
+											: 'border-transparent'}"
 									>
-										<!-- Side padding lives on the column so the composer keeps its box in both states. -->
-										<div
-											class="pointer-events-auto flex w-full max-w-3xl flex-col rounded-t-3xl border border-b-0 {noteChatExpanded
-												? 'h-[min(60dvh,36rem)] border-base-100/40 bg-base-0 pt-1.5 dark:border-base-800/25 dark:bg-base-900'
-												: 'border-transparent'}"
-										>
-											{#if !noteChatExpanded}
-												<button
-													type="button"
-													class="mb-0.5 ml-3 flex max-w-full items-center gap-1 self-start rounded-lg px-1.5 py-0.5 text-xs text-base-500 transition hover:text-base-800 dark:text-base-400 dark:hover:text-base-100"
-													aria-label={$i18n.t('Expand')}
-													aria-expanded="false"
-													on:click={() => (noteChatExpanded = true)}
+										{#if !noteChatExpanded}
+											<button
+												type="button"
+												class="mb-0.5 ml-3 flex max-w-full items-center gap-1 self-start rounded-lg px-1.5 py-0.5 text-xs text-base-500 transition hover:text-base-800 dark:text-base-400 dark:hover:text-base-100"
+												aria-label={$i18n.t('Expand')}
+												aria-expanded="false"
+												on:click={() => (noteChatExpanded = true)}
+											>
+												<ChevronUp className="size-3 shrink-0" strokeWidth="2" />
+												<span class="truncate"
+													>{noteChats.find((chat) => chat.id === noteChatId)?.title ||
+														$i18n.t('Chat')}</span
 												>
-													<ChevronUp className="size-3 shrink-0" strokeWidth="2" />
-													<span class="truncate"
-														>{noteChats.find((chat) => chat.id === noteChatId)?.title ||
-															$i18n.t('Chat')}</span
-													>
-												</button>
-											{/if}
-											<div class="flex min-h-0 flex-1 flex-col">
-												{#if !noteChatLoading && (noteChatId || noteChatDraftKey)}
-													{#key note.id}
-														<Chat
-															embedded={true}
-															chatIdProp={noteChatId ?? ''}
-															embeddedChats={noteChats}
-															embeddedDraftKey={noteChatDraftKey}
-															suggestedPrompts={noteChatSuggestedPrompts}
-															selectedText={selectedContent?.text ?? ''}
-															notePageId={activePageId}
-															noteFiles={noteAttachmentFiles}
-															embeddedCollapsed={!noteChatExpanded}
-															embeddedInset
-															onRecordedAudio={noteAudioHandler}
-															onCollapseEmbedded={() => (noteChatExpanded = false)}
-															onBeforeNoteSubmit={async () => {
-																noteChatExpanded = true;
-																await flushActivePage();
-															}}
-															onInsertToNote={note?.write_access ? insertHandler : null}
-															onNewEmbeddedChat={createNoteChat}
-															onCreateEmbeddedChat={createNoteChatOnFirstMessage}
-															onSelectEmbeddedChat={(chatId) => {
-																if (!chatId || chatId === noteChatId) return;
-																noteChatId = chatId;
-																noteChatDraftKey = '';
-															}}
-															onDeleteEmbeddedChat={deleteNoteChat}
-															onEmbeddedChatTitle={(chatId, title) => {
-																noteChats = noteChats.map((chat) =>
-																	chat.id === chatId
-																		? {
-																				...chat,
-																				title,
-																				chat: {
-																					...(chat.chat ?? {}),
-																					title
-																				}
+											</button>
+										{/if}
+										<div class="flex min-h-0 flex-1 flex-col">
+											{#if !noteChatLoading && (noteChatId || noteChatDraftKey)}
+												{#key note.id}
+													<Chat
+														embedded={true}
+														chatIdProp={noteChatId ?? ''}
+														embeddedChats={noteChats}
+														embeddedDraftKey={noteChatDraftKey}
+														suggestedPrompts={noteChatSuggestedPrompts}
+														selectedText={selectedContent?.text ?? ''}
+														notePageId={activePageId}
+														noteFiles={noteAttachmentFiles}
+														embeddedCollapsed={!noteChatExpanded}
+														embeddedInset
+														onRecordedAudio={noteAudioHandler}
+														onCollapseEmbedded={() => (noteChatExpanded = false)}
+														onBeforeNoteSubmit={async () => {
+															noteChatExpanded = true;
+															await flushActivePage();
+														}}
+														onInsertToNote={note?.write_access ? insertHandler : null}
+														onNewEmbeddedChat={createNoteChat}
+														onCreateEmbeddedChat={createNoteChatOnFirstMessage}
+														onSelectEmbeddedChat={(chatId) => {
+															if (!chatId || chatId === noteChatId) return;
+															noteChatId = chatId;
+															noteChatDraftKey = '';
+														}}
+														onDeleteEmbeddedChat={deleteNoteChat}
+														onEmbeddedChatTitle={(chatId, title) => {
+															noteChats = noteChats.map((chat) =>
+																chat.id === chatId
+																	? {
+																			...chat,
+																			title,
+																			chat: {
+																				...(chat.chat ?? {}),
+																				title
 																			}
-																		: chat
-																);
-															}}
-														/>
-													{/key}
-												{/if}
-											</div>
+																		}
+																	: chat
+															);
+														}}
+													/>
+												{/key}
+											{/if}
 										</div>
 									</div>
 								</div>
-							{/if}
-						</div>
+							</div>
+						{/if}
 					</div>
 				</div>
 			{/if}

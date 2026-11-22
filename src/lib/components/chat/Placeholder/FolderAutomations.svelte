@@ -11,6 +11,7 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
+	import ChatParticipants from '$lib/components/common/ChatParticipants.svelte';
 
 	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 	const appLayout = getContext<AppLayoutContext | undefined>('appLayout');
@@ -30,8 +31,8 @@
 	}
 
 	// An existing automation opens as its own page, in a tab beside the folder like chats do.
+	// Anyone who can see the folder can open it; the page is read-only for what they can't change.
 	function edit(automation: FolderAutomation) {
-		if (!automation.can_edit) return;
 		const href = `/automations/${automation.id}`;
 		if (appLayout?.openPageTab) appLayout.openPageTab({ href, label: automation.name });
 		else void goto(href);
@@ -87,9 +88,7 @@
 		{#each automations as automation (automation.id)}
 			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 			<li
-				class="flex items-center gap-2.5 rounded-xl px-3 py-1.5 transition-colors hover:bg-base-50 dark:hover:bg-base-850/50 {automation.can_edit
-					? 'cursor-pointer'
-					: ''}"
+				class="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-1.5 transition-colors hover:bg-base-50 dark:hover:bg-base-850/50"
 				on:click={() => edit(automation)}
 			>
 				<Icon name="clock" size={14} class="text-base-400 dark:text-base-500" />
@@ -101,9 +100,16 @@
 					>{formatTrigger(automation.data, $i18n)}</span
 				>
 				<span class="flex-1"></span>
-				<span class="text-[0.6875rem] tabular-nums text-base-400 dark:text-base-500"
-					>{lastRun(automation)}</span
-				>
+				<!-- The owner's avatar beside the last run, as on the automations page. -->
+				<div class="flex w-28 shrink-0 items-center justify-end gap-2">
+					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+					<div class="hidden shrink-0 @sm:flex" on:click|stopPropagation>
+						<ChatParticipants owner={{ id: automation.user_id, name: automation.user_name }} />
+					</div>
+					<span class="truncate text-[0.6875rem] tabular-nums text-base-400 dark:text-base-500"
+						>{lastRun(automation)}</span
+					>
+				</div>
 				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 				<div on:click|stopPropagation>
 					<Switch

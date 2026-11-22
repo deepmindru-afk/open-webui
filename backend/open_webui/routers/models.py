@@ -85,7 +85,7 @@ async def _check_model_controls(form, previous, user, request):
         if not request.app.state.MODELS:
             await get_all_models(request, user=user)
         base = request.app.state.MODELS.get(form.base_model_id or form.id, {})
-        if 'pipe' in base or base.get('owned_by') == 'arena':
+        if 'pipe' in base or base.get('owned_by') == 'router':
             raise HTTPException(400, 'Model controls require a server-managed provider model.')
 
 
@@ -878,7 +878,7 @@ async def _verify_version_dependencies(request, form, user, db):
     from open_webui.models.knowledge import Knowledges
     from open_webui.models.notes import Notes
     from open_webui.models.skills import Skills
-    from open_webui.routers.machines import list_terminal_servers
+    from open_webui.routers.machines import list_machines
     from open_webui.routers.tools import get_tools
 
     async def require_resource(resource_type, resource_id, resource):
@@ -917,9 +917,9 @@ async def _verify_version_dependencies(request, form, user, db):
             function = await Functions.get_function_by_id(function_id, db=db)
             if not function or not function.is_active:
                 raise HTTPException(400, f'A referenced function is unavailable: {function_id}')
-    terminal_id = getattr(form.meta, 'terminalId', None)
-    if terminal_id and terminal_id not in {t['id'] for t in await list_terminal_servers(request, user=user)}:
-        raise HTTPException(400, 'The referenced terminal is missing or inaccessible.')
+    machine_id = getattr(form.meta, 'machineId', None) or getattr(form.meta, 'terminalId', None)
+    if machine_id and machine_id not in {t['id'] for t in await list_machines(request, user=user)}:
+        raise HTTPException(400, 'The referenced machine is missing or inaccessible.')
 
 
 class ModelVersionForm(BaseModel):
@@ -991,19 +991,19 @@ async def get_model_profile_image(
             profile_image_url = (meta or {}).get('profile_image_url')
             updated_at = model_updated_at
 
-    # Fallback: check arena models stored in config (not in the DB)
+    # Fallback: check router models stored in config (not in the DB)
     if not profile_image_url:
-        arena_models = await Config.get('evaluation.arena.models', []) or []
-        for arena_model in arena_models:
-            if arena_model.get('id') == id:
-                arena_meta = arena_model.get('meta', {})
-                access_grants = arena_meta.get('access_grants', [])
+        router_models = await Config.get('router.models', []) or []
+        for router_model in router_models:
+            if router_model.get('id') == id:
+                router_meta = router_model.get('meta', {})
+                access_grants = router_meta.get('access_grants', [])
                 if (
                     bypass_access_control
                     or (not access_grants and user.role == 'admin')
                     or await has_access(user.id, permission='read', access_grants=access_grants, db=db)
                 ):
-                    profile_image_url = arena_meta.get('profile_image_url')
+                    profile_image_url = router_meta.get('profile_image_url')
                 break
 
     if profile_image_url:

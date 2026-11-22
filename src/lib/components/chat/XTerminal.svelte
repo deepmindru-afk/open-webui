@@ -1,14 +1,11 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Terminal } from '@xterm/xterm';
-	import { FitAddon } from '@xterm/addon-fit';
-	import { WebLinksAddon } from '@xterm/addon-web-links';
-	import { WebglAddon } from '@xterm/addon-webgl';
-	import '@xterm/xterm/css/xterm.css';
-	import { terminalRequest, TerminalRequestError, type TerminalTarget } from '$lib/apis/machines';
-	import { assignTerminalChat, openTerminalSocket } from '$lib/apis/machines/socket';
+	import type { Terminal } from '@xterm/xterm';
+	import type { FitAddon } from '@xterm/addon-fit';
+	import { machineRequest, MachineRequestError, type MachineTarget } from '$lib/apis/machines';
+	import { assignTerminalChat, openMachineSocket } from '$lib/apis/machines/socket';
 
-	export let target: TerminalTarget;
+	export let target: MachineTarget;
 
 	export let overlay = false;
 	export let active = true;
@@ -110,9 +107,9 @@
 		connecting = true;
 		try {
 			if (!sessionId) throw new Error('Session no longer available');
-			await terminalRequest(target, `/api/terminals/${encodeURIComponent(sessionId)}`);
+			await machineRequest(target, `/api/terminals/${encodeURIComponent(sessionId)}`);
 			if (destroyed) return;
-			ws = openTerminalSocket(
+			ws = openMachineSocket(
 				target,
 				`/api/terminals/${encodeURIComponent(sessionId)}`,
 				() => {
@@ -229,10 +226,7 @@
 		} catch (error) {
 			if (destroyed) return;
 			disconnect();
-			onUnavailable(
-				String(error),
-				error instanceof TerminalRequestError ? error.status : undefined
-			);
+			onUnavailable(String(error), error instanceof MachineRequestError ? error.status : undefined);
 			write(`\r\n\x1b[31m[${error}]\x1b[0m\r\n`);
 		}
 	}
@@ -240,8 +234,16 @@
 	$: if (active && term) requestAnimationFrame(fit);
 	$: if (connected) reportActivity(active);
 
-	onMount(() => {
-		document.addEventListener('visibilitychange', reportVisibility);
+	// xterm is only needed once a terminal is on screen, so it stays out of the boot bundle.
+	const init = async () => {
+		const [{ Terminal }, { FitAddon }, { WebLinksAddon }, { WebglAddon }] = await Promise.all([
+			import('@xterm/xterm'),
+			import('@xterm/addon-fit'),
+			import('@xterm/addon-web-links'),
+			import('@xterm/addon-webgl'),
+			import('@xterm/xterm/css/xterm.css')
+		]);
+		if (destroyed) return;
 		term = new Terminal({
 			allowTransparency: true,
 			cursorBlink: !readOnly,
@@ -287,6 +289,11 @@
 			});
 			connect();
 		}
+	};
+
+	onMount(() => {
+		document.addEventListener('visibilitychange', reportVisibility);
+		void init();
 	});
 
 	onDestroy(() => {

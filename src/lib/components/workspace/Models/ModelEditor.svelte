@@ -23,9 +23,14 @@
 		functions,
 		user,
 		settings,
-		visibleControls
+		visibleControls,
+		imageModels,
+		videoModels
 	} from '$lib/stores';
 	import { WEBUI_BASE_URL, DEFAULT_CAPABILITIES } from '$lib/constants';
+	import { getImageModels } from '$lib/apis/images';
+	import { getVideoModels } from '$lib/apis/videos';
+	import { getMachines, type MachineServer } from '$lib/apis/machines';
 
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
@@ -63,7 +68,7 @@
 	import LanguageModeSelect from '$lib/components/common/LanguageModeSelect.svelte';
 	import LocalizedPromptSuggestions from './LocalizedPromptSuggestions.svelte';
 	import PromptSuggestions from './PromptSuggestions.svelte';
-	import TerminalSelector from './TerminalSelector.svelte';
+	import MachineSelector from './MachineSelector.svelte';
 	import ImageModelSelector from './ImageModelSelector.svelte';
 	import VideoModelSelector from './VideoModelSelector.svelte';
 	import TTSVoiceInput from './TTSVoiceInput.svelte';
@@ -82,6 +87,7 @@
 		pruneEmptyLocaleEntries,
 		resolveLocalizedPromptSuggestions
 	} from '$lib/utils/localizedContent';
+	import { isMachine, metaMachineIdOf } from '$lib/utils/machines';
 
 	const i18n: any = getContext('i18n');
 	const formId = `model-editor-${uuidv4()}`;
@@ -268,10 +274,35 @@
 
 	let actionIds = [];
 	let accessGrants: any[] = [];
-	let terminalId = '';
+	let machineId = '';
 	let imageModelId = '';
 	let videoModelId = '';
-	$: hasTerminal = $config?.features?.enable_terminal_servers || $config?.features?.tether;
+	$: hasMachine = $config?.features?.enable_machines || $config?.features?.tether;
+	let machines: MachineServer[] = [];
+
+	$: showMachine = capabilities.terminal && hasMachine;
+	$: machineSummary = machineId
+		? (machines.find((t) => t.id === machineId)?.name ?? machineId)
+		: $i18n.t('None');
+
+	const mediaModelName = (list: any[] | null, id: string) => {
+		if (!id) return $i18n.t('Default');
+		return (list ?? []).find((m) => m.id === id)?.name ?? $i18n.t('Unavailable');
+	};
+	$: showImageModel =
+		capabilities.image_generation &&
+		$config?.features?.enable_image_generation &&
+		(($imageModels ?? []).length > 1 || !!imageModelId);
+	$: showVideoModel =
+		capabilities.video_generation &&
+		$config?.features?.enable_video_generation &&
+		(($videoModels ?? []).length > 1 || !!videoModelId);
+	$: mediaSummary = [
+		showImageModel ? mediaModelName($imageModels, imageModelId) : null,
+		showVideoModel ? mediaModelName($videoModels, videoModelId) : null
+	]
+		.filter(Boolean)
+		.join(' · ');
 	let tts = { voice: '' };
 	let voice = { voice: '' };
 	export let suggestionTags: { name: string }[] = [];
@@ -376,12 +407,12 @@
 		return models
 			.filter(
 				(baseModel) =>
-					baseModel.owned_by !== 'terminal' &&
+					!isMachine(baseModel.owned_by) &&
 					(!currentModelId ||
 						baseModel.id !== currentModelId ||
 						(edit && baseModel.id === info.base_model_id)) &&
 					(!baseModel?.preset || (edit && baseModel.id === info.base_model_id)) &&
-					baseModel?.owned_by !== 'arena' &&
+					baseModel?.owned_by !== 'router' &&
 					!(baseModel?.owner_id ?? false) &&
 					(includeHidden ||
 						!(baseModel?.info?.meta?.hidden ?? false) ||
@@ -524,11 +555,12 @@
 			delete modelInfo.meta.i18n;
 		}
 
-		if (terminalId || defaultMeta.terminalId) {
-			modelInfo.meta.terminalId = terminalId;
+		delete (modelInfo.meta as Record<string, unknown>).terminalId; // former name of machineId
+		if (machineId || metaMachineIdOf(defaultMeta)) {
+			modelInfo.meta.machineId = machineId;
 		} else {
-			if (modelInfo.meta.terminalId) {
-				delete modelInfo.meta.terminalId;
+			if (modelInfo.meta.machineId) {
+				delete modelInfo.meta.machineId;
 			}
 		}
 
@@ -717,8 +749,8 @@
 				const base_model = $baseModels
 					.filter(
 						(m) =>
-							m.owned_by !== 'terminal' &&
-							((!m?.preset && !(m?.arena ?? false)) || (edit && m.id === model.base_model_id))
+							!isMachine(m.owned_by) &&
+							((!m?.preset && !(m?.router ?? false)) || (edit && m.id === model.base_model_id))
 					)
 					.find((m) => [model.base_model_id, `${model.base_model_id}:latest`].includes(m.id));
 
@@ -775,7 +807,7 @@
 			};
 			defaultFeatureIds = model?.meta?.defaultFeatureIds ?? defaultMeta.defaultFeatureIds ?? [];
 			builtinTools = model?.meta?.builtinTools ?? defaultMeta.builtinTools ?? {};
-			terminalId = model?.meta?.terminalId ?? defaultMeta.terminalId ?? '';
+			machineId = metaMachineIdOf(model?.meta) ?? metaMachineIdOf(defaultMeta) ?? '';
 			imageModelId = model?.meta?.imageModelId ?? defaultMeta.imageModelId ?? '';
 			videoModelId = model?.meta?.videoModelId ?? defaultMeta.videoModelId ?? '';
 			tts = { voice: model?.meta?.tts?.voice ?? '' };
@@ -813,6 +845,22 @@
 			await loadVoices();
 		}
 
+		if ($config?.features?.enable_image_generation && $imageModels === null) {
+			getImageModels(localStorage.token)
+				.catch(() => [])
+				.then((res) => imageModels.set(res));
+		}
+		if ($config?.features?.enable_video_generation && $videoModels === null) {
+			getVideoModels(localStorage.token)
+				.catch(() => [])
+				.then((res) => videoModels.set(res));
+		}
+		if (hasMachine) {
+			getMachines(localStorage.token)
+				.then((res) => (machines = res ?? []))
+				.catch(() => {});
+		}
+
 		// Fetch admin-configured default model metadata so the editor
 		// reflects the actual defaults rather than hardcoded values
 		const modelsConfig = await getModelsDefaults(localStorage.token).catch(() => null);
@@ -824,7 +872,7 @@
 		defaultFeatureIds = defaultMeta.defaultFeatureIds ?? [];
 		builtinTools = defaultMeta.builtinTools ?? {};
 		toolIds = defaultMeta.toolIds ?? [];
-		terminalId = defaultMeta.terminalId ?? '';
+		machineId = metaMachineIdOf(defaultMeta) ?? '';
 		imageModelId = defaultMeta.imageModelId ?? '';
 		videoModelId = defaultMeta.videoModelId ?? '';
 
@@ -1856,14 +1904,32 @@
 											/>
 										</div>
 									</ModelSettingsSection>
-									{#if capabilities.terminal && hasTerminal}
-										<TerminalSelector bind:terminalId />
+									{#if showImageModel || showVideoModel}
+										<ModelSettingsSection
+											label={$i18n.t('Images & Videos')}
+											description={$i18n.t(
+												'Choose the image and video models used for chats with this model, unless the user picks another.'
+											)}
+											summary={mediaSummary}
+										>
+											{#if showImageModel}
+												<ImageModelSelector bind:imageModelId label={$i18n.t('Image model')} />
+											{/if}
+											{#if showVideoModel}
+												<VideoModelSelector bind:videoModelId label={$i18n.t('Video model')} />
+											{/if}
+										</ModelSettingsSection>
 									{/if}
-									{#if capabilities.image_generation && $config?.features?.enable_image_generation}
-										<ImageModelSelector bind:imageModelId />
-									{/if}
-									{#if capabilities.video_generation && $config?.features?.enable_video_generation}
-										<VideoModelSelector bind:videoModelId />
+									{#if showMachine}
+										<ModelSettingsSection
+											label={$i18n.t('Machine')}
+											description={$i18n.t(
+												'Choose the machine selected by default for chats with this model.'
+											)}
+											summary={machineSummary}
+										>
+											<MachineSelector bind:machineId label={$i18n.t('Default')} />
+										</ModelSettingsSection>
 									{/if}
 								</div>
 							</fieldset>

@@ -20,15 +20,15 @@
 	import { baseModels, user, config, settings } from '$lib/stores';
 	import { getModels } from '$lib/apis';
 	import ModelSelector from '$lib/components/chat/ModelSelector/Selector.svelte';
-	import FileNav from '$lib/components/chat/FileNav.svelte';
 	import FolderOpen from '$lib/components/icons/FolderOpen.svelte';
-	import TerminalMenu from '$lib/components/chat/MessageInput/TerminalMenu.svelte';
+	import MachineMenu from '$lib/components/chat/MessageInput/MachineMenu.svelte';
 	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
 	import { writable } from 'svelte/store';
 
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Knowledge from '$lib/components/workspace/Models/Knowledge.svelte';
 	import { getFolderById } from '$lib/apis/folders';
+	import { machineIdOf } from '$lib/utils/machines';
 	const i18n = getContext<Writable<I18n>>('i18n');
 
 	export let show = false;
@@ -47,7 +47,7 @@
 	let data = {
 		description: '',
 		model_ids: [] as string[],
-		terminal_id: '',
+		machine_id: '',
 		working_directory: '',
 		system_prompt: '',
 		files: []
@@ -57,25 +57,25 @@
 	let showAccessModal = false;
 	let showAdvanced = false;
 	let showDirectoryPicker = false;
-	let terminalModels = [];
+	let machineModels = [];
 	let modelsLoading = false;
 	let modelRequest = 0;
 	let modelTimer: ReturnType<typeof setTimeout>;
 
-	const loadTerminalModels = (visible: boolean, terminalId: string, cwd: string) => {
+	const loadMachineModels = (visible: boolean, machineId: string, cwd: string) => {
 		const request = ++modelRequest;
 		clearTimeout(modelTimer);
-		terminalModels = [];
-		modelsLoading = visible && !!terminalId;
+		machineModels = [];
+		modelsLoading = visible && !!machineId;
 		if (!modelsLoading) return;
 
 		modelTimer = setTimeout(async () => {
 			try {
 				const available = await getModels(localStorage.token, false, false, {
-					terminalId,
+					machineId,
 					cwd: cwd.trim()
 				});
-				if (request === modelRequest) terminalModels = available;
+				if (request === modelRequest) machineModels = available;
 			} catch (error) {
 				if (request === modelRequest) toast.error(`${error}`);
 			} finally {
@@ -84,23 +84,23 @@
 		}, 250);
 	};
 
-	// The composer's terminal menu picks the folder's default terminal.
-	const folderTerminal = writable<string | null>(null);
-	$: folderTerminal.set(data.terminal_id || null);
-	const folderTerminalSelection = {
-		subscribe: folderTerminal.subscribe,
+	// The composer's machine menu picks the folder's default machine.
+	const folderMachine = writable<string | null>(null);
+	$: folderMachine.set(data.machine_id || null);
+	const folderMachineSelection = {
+		subscribe: folderMachine.subscribe,
 		set: (id: string | null) => {
-			if ((id ?? '') === data.terminal_id) return;
-			data.terminal_id = id ?? '';
+			if ((id ?? '') === data.machine_id) return;
+			data.machine_id = id ?? '';
 			data.working_directory = '';
 			data.model_ids = data.model_ids.filter((modelId) => !modelId.startsWith('agent:'));
 		}
 	};
 
-	$: modelTerminalId = data.terminal_id;
+	$: modelMachineId = data.machine_id;
 	$: modelDirectory = data.working_directory;
-	$: loadTerminalModels(show, modelTerminalId, modelDirectory);
-	$: folderModels = modelTerminalId ? terminalModels : $baseModels;
+	$: loadMachineModels(show, modelMachineId, modelDirectory);
+	$: folderModels = modelMachineId ? machineModels : $baseModels;
 
 	onDestroy(() => {
 		clearTimeout(modelTimer);
@@ -133,8 +133,8 @@
 			data: {
 				description: data.description.trim(),
 				model_ids: data.model_ids,
-				terminal_id: data.terminal_id || null,
-				working_directory: data.terminal_id ? data.working_directory.trim() || null : null,
+				machine_id: data.machine_id || null,
+				working_directory: data.machine_id ? data.working_directory.trim() || null : null,
 				system_prompt: data.system_prompt,
 				files: data.files
 			},
@@ -165,7 +165,7 @@
 				...folder.data,
 				description: folder.data?.description ?? '',
 				model_ids: folder.data?.model_ids ?? [],
-				terminal_id: folder.data?.terminal_id ?? '',
+				machine_id: machineIdOf(folder.data) ?? '',
 				working_directory: folder.data?.working_directory ?? ''
 			};
 		}
@@ -200,7 +200,7 @@
 		data = {
 			description: '',
 			model_ids: [],
-			terminal_id: '',
+			machine_id: '',
 			working_directory: '',
 			system_prompt: '',
 			files: []
@@ -369,11 +369,11 @@
 								<ModelSettingsLabel
 									label={$i18n.t('Default machine')}
 									description={$i18n.t(
-										'Select the terminal used by default for new chats in this folder.'
+										'Select the machine used by default for new chats in this folder.'
 									)}
 								/>
 								<div class="flex min-w-0">
-									<TerminalMenu selectedTerminalId={folderTerminalSelection} showDirectory={false}>
+									<MachineMenu selectedMachineId={folderMachineSelection} showDirectory={false}>
 										{#snippet trigger(selected: string | null, label: string)}
 											<button
 												type="button"
@@ -384,10 +384,10 @@
 												<ChevronDown className="size-3 shrink-0" />
 											</button>
 										{/snippet}
-									</TerminalMenu>
+									</MachineMenu>
 								</div>
 							</div>
-							{#if data.terminal_id}
+							{#if data.machine_id}
 								<div
 									class="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-2 px-1 py-1 sm:grid-cols-[8rem_minmax(0,1fr)]"
 								>
@@ -398,7 +398,7 @@
 										<ModelSettingsLabel
 											label={$i18n.t('Working directory')}
 											description={$i18n.t(
-												'Path on the selected terminal. Applies to new chats only.'
+												'Path on the selected machine. Applies to new chats only.'
 											)}
 										/>
 									</label>
@@ -407,7 +407,7 @@
 											id="folder-working-directory"
 											class="min-w-0 flex-1 bg-transparent text-xs font-normal text-base-900 outline-hidden placeholder:text-base-400 dark:text-base-100 dark:placeholder:text-base-600"
 											bind:value={data.working_directory}
-											placeholder={$i18n.t('Use the terminal’s default directory')}
+											placeholder={$i18n.t('Use the machine’s default directory')}
 										/>
 										<button
 											type="button"
@@ -535,7 +535,7 @@
 	<FolderShareModal bind:show={showAccessModal} {folder} />
 {/if}
 
-{#if show && showDirectoryPicker && data.terminal_id}
+{#if show && showDirectoryPicker && data.machine_id}
 	<Modal bind:show={showDirectoryPicker} ariaLabel={$i18n.t('Choose working directory')} size="md">
 		<div class="px-2 py-4">
 			<div class="mb-3 flex items-center justify-between px-2 text-sm">
@@ -548,16 +548,18 @@
 				>
 			</div>
 			<div class="h-[60dvh] min-h-0">
-				<FileNav
-					terminalId={data.terminal_id}
-					initialDirectory={data.working_directory || null}
-					manageFileRequests={false}
-					showTerminalDock={false}
-					onSelectDirectory={(path) => {
-						data.working_directory = path;
-						showDirectoryPicker = false;
-					}}
-				/>
+				{#await import('$lib/components/chat/FileNav.svelte') then { default: FileNav }}
+					<FileNav
+						machineId={data.machine_id}
+						initialDirectory={data.working_directory || null}
+						manageFileRequests={false}
+						showTerminalDock={false}
+						onSelectDirectory={(path) => {
+							data.working_directory = path;
+							showDirectoryPicker = false;
+						}}
+					/>
+				{/await}
 			</div>
 		</div>
 	</Modal>

@@ -116,13 +116,19 @@ class AuditContext:
             self.response_body.extend(chunk[: self.max_body_size - len(self.response_body)])
 
 
-def log_model_usage(request: Request, user: UserModel, model_id: str, usage: Optional[Dict]):
+def log_model_usage(
+    request: Request, user: UserModel, model_id: str, usage: Optional[Dict], task: Optional[str] = None
+):
     """Write a model call's usage separately from its originating HTTP request."""
     request_id = getattr(request.state, 'audit_request_id', None)
     if not request_id or not usage:
         return
     try:
         usage = normalize_usage(usage)
+        extra = {'event': 'model_usage', 'request_id': request_id}
+        if task:
+            # Background calls name their task; chat replies carry none.
+            extra['task'] = task
         AuditLogger(logger).write(
             AuditLogEntry(
                 id=str(uuid.uuid4()),
@@ -135,7 +141,7 @@ def log_model_usage(request: Request, user: UserModel, model_id: str, usage: Opt
                 model_id=model_id,
                 usage={key: usage[key] for key in ('input_tokens', 'output_tokens', 'total_tokens') if key in usage},
             ),
-            extra={'event': 'model_usage', 'request_id': request_id},
+            extra=extra,
         )
     except Exception as e:
         logger.error('Failed to log model usage: {}', e)
@@ -168,6 +174,7 @@ class AuditLoggingMiddleware:
         max_body_size: int = MAX_BODY_LOG_SIZE,
         audit_level: AuditLevel = AuditLevel.NONE,
         audit_get_requests: bool = False,
+        audit_anonymous_requests: bool = False,
     ) -> None:
         self.app = app
         self.audit_logger = AuditLogger(logger)
@@ -181,15 +188,20 @@ class AuditLoggingMiddleware:
         self.audited_methods = set(self.DEFAULT_AUDITED_METHODS)
         if audit_get_requests:
             self.audited_methods.add('GET')
+        self.audit_anonymous_requests = audit_anonymous_requests
         self.audit_level = audit_level
 
         # Paths are fixed for the process lifetime; compile once instead of
         # per request. None means the corresponding mode has nothing to match.
         self._included_pattern = (
-            re.compile(r'^/api(?:/v1)?/(' + '|'.join(self.included_paths) + r')\b') if self.included_paths else None
+            re.compile(r'^(?:/api(?:/v1)?)?/(' + '|'.join(self.included_paths) + r')\b')
+            if self.included_paths
+            else None
         )
         self._excluded_pattern = (
-            re.compile(r'^/api(?:/v1)?/(' + '|'.join(self.excluded_paths) + r')\b') if self.excluded_paths else None
+            re.compile(r'^(?:/api(?:/v1)?)?/(' + '|'.join(self.excluded_paths) + r')\b')
+            if self.excluded_paths
+            else None
         )
 
         if self.included_paths and self.excluded_paths:
@@ -292,9 +304,9 @@ class AuditLoggingMiddleware:
             if path.startswith(endpoint):
                 return False  # Do NOT skip logging for auth endpoints
 
-        # Skip logging if the request is not authenticated
+        # Skip logging anonymous requests unless opted in
         # Token is set by AppHTTPMiddleware from any accepted credential
-        if not getattr(request.state, 'token', None):
+        if not self.audit_anonymous_requests and not getattr(request.state, 'token', None):
             return True
 
         # Whitelist mode: only log paths that match included_paths

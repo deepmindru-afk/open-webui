@@ -2,13 +2,12 @@
 	import { getContext } from 'svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
-	import FileNav from '$lib/components/chat/FileNav.svelte';
-	import type { TerminalTarget } from '$lib/apis/machines';
+	import type { MachineTarget } from '$lib/apis/machines';
 
 	const i18n = getContext<any>('i18n');
 
-	/** Browses one instance's files: the terminal, plus the chat or model it belongs to. */
-	export let target: TerminalTarget;
+	/** Browses one instance's files: the machine, plus the chat or model it belongs to. */
+	export let target: MachineTarget;
 	export let label: string;
 	export let onClose: () => void;
 </script>
@@ -25,7 +24,9 @@
 			>
 		</div>
 		<div class="h-[70dvh] min-h-0">
-			<FileNav {target} manageFileRequests={false} showTerminalDock={false} />
+			{#await import('$lib/components/chat/FileNav.svelte') then { default: FileNav }}
+				<FileNav {target} manageFileRequests={false} showTerminalDock={false} />
+			{/await}
 		</div>
 	</div>
 </Modal>

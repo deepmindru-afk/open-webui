@@ -377,10 +377,12 @@ MACHINE_CONNECTIONS = JSONCodec.loads(
     os.getenv('MACHINE_CONNECTIONS') or os.getenv('TERMINAL_SERVER_CONNECTIONS') or '[]'
 )
 
-try:
-    TERMINAL_PROXY_HEADERS = JSONCodec.loads(os.getenv('TERMINAL_PROXY_HEADERS', '{}'))
+try:  # TERMINAL_PROXY_HEADERS is the former name, still read as a fallback.
+    MACHINE_PROXY_HEADERS = JSONCodec.loads(
+        os.getenv('MACHINE_PROXY_HEADERS') or os.getenv('TERMINAL_PROXY_HEADERS') or '{}'
+    )
 except Exception:
-    TERMINAL_PROXY_HEADERS = {}
+    MACHINE_PROXY_HEADERS = {}
 
 # Code Interpreter
 
@@ -1870,6 +1872,10 @@ USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING = (
 
 USER_PERMISSIONS_FOLDERS_ALLOW_SHARING = os.getenv('USER_PERMISSIONS_FOLDERS_ALLOW_SHARING', 'False').lower() == 'true'
 
+USER_PERMISSIONS_AUTOMATIONS_ALLOW_SHARING = (
+    os.getenv('USER_PERMISSIONS_AUTOMATIONS_ALLOW_SHARING', 'False').lower() == 'true'
+)
+
 
 USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING = (
     os.getenv('USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING', 'False').lower() == 'true'
@@ -2014,6 +2020,7 @@ DEFAULT_USER_PERMISSIONS = {
         'notes': USER_PERMISSIONS_NOTES_ALLOW_SHARING,
         'public_notes': USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING,
         'folders': USER_PERMISSIONS_FOLDERS_ALLOW_SHARING,
+        'automations': USER_PERMISSIONS_AUTOMATIONS_ALLOW_SHARING,
         'public_chats': USER_PERMISSIONS_CHAT_ALLOW_PUBLIC_SHARING,
         'open_chats': USER_PERMISSIONS_CHAT_ALLOW_OPEN_SHARING,
         'public_calendars': USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING,
@@ -2136,31 +2143,15 @@ ENABLE_NOTES = os.getenv('ENABLE_NOTES', 'True').lower() == 'true'
 
 ENABLE_USER_STATUS = os.getenv('ENABLE_USER_STATUS', 'True').lower() == 'true'
 
-ENABLE_EVALUATION_ARENA_MODELS = os.getenv('ENABLE_EVALUATION_ARENA_MODELS', 'False').lower() == 'true'
 try:
-    evaluation_arena_models = JSONCodec.loads(os.getenv('EVALUATION_ARENA_MODELS', '[]'))
-    if not isinstance(evaluation_arena_models, list) or not all(
-        isinstance(model, dict) for model in evaluation_arena_models
-    ):
-        raise ValueError('EVALUATION_ARENA_MODELS must be a JSON list of objects')
+    router_models = JSONCodec.loads(os.getenv('ROUTER_MODELS', '[]'))
+    if not isinstance(router_models, list) or not all(isinstance(model, dict) for model in router_models):
+        raise ValueError('ROUTER_MODELS must be a JSON list of objects')
 except Exception as e:
-    log.exception(f'Error loading EVALUATION_ARENA_MODELS: {e}')
-    evaluation_arena_models = []
+    log.exception(f'Error loading ROUTER_MODELS: {e}')
+    router_models = []
 
-EVALUATION_ARENA_MODELS = evaluation_arena_models
-
-DEFAULT_ARENA_MODEL = {
-    'id': 'arena-model',
-    'name': 'Arena Model',
-    'meta': {
-        # LICENSE covers this Open WebUI fallback logo.
-        # Do not alter, remove, obscure, or replace it except as LICENSE permits:
-        # https://docs.openwebui.com/license.
-        'profile_image_url': '/favicon.png',
-        'description': 'Submit your questions to anonymous AI chatbots and vote on the best response.',
-        'model_ids': None,
-    },
-}
+ROUTER_MODELS = router_models
 
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
 
@@ -3312,8 +3303,7 @@ DEFAULT_CONFIG = {
     'comments.enable': ENABLE_COMMENTS,
     'notifications.enable': ENABLE_NOTIFICATIONS,
     'users.enable_status': ENABLE_USER_STATUS,
-    'evaluation.arena.enable': ENABLE_EVALUATION_ARENA_MODELS,
-    'evaluation.arena.models': EVALUATION_ARENA_MODELS,
+    'router.models': ROUTER_MODELS,
     'webhook_url': WEBHOOK_URL,
     'ui.enable_community_sharing': ENABLE_COMMUNITY_SHARING,
     'ui.enable_message_rating': ENABLE_MESSAGE_RATING,

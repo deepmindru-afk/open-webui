@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TerminalContext } from '$lib/types';
+	import type { MachineContext } from '$lib/types';
 	import type { Writable } from 'svelte/store';
 	import { toast } from 'svelte-sonner';
 	import { marked } from 'marked';
@@ -56,9 +56,9 @@
 
 	export let prompt = '';
 	export let files = [];
-	export let terminalContext: TerminalContext | null = null;
-	export let selectedTerminalId: Pick<Writable<string | null>, 'subscribe' | 'set'>;
-	export let terminalSkills: Writable<any[]>;
+	export let machineContext: MachineContext | null = null;
+	export let selectedMachineId: Pick<Writable<string | null>, 'subscribe' | 'set'>;
+	export let machineSkills: Writable<any[]>;
 	export let messageInput = null;
 
 	export let selectedToolIds = [];
@@ -111,7 +111,7 @@
 	let selectedModelDescription = '';
 	let selectedSuggestionPrompts = [];
 
-	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
+	$: models = selectedModels.map((id) => ($_models ?? []).find((m) => m.id === id));
 	$: selectedModel = atSelectedModel ?? models[selectedModelIdx];
 	$: selectedModelName = resolveLocalizedModelName(selectedModel, $i18n.language);
 	$: selectedModelDescription =
@@ -152,11 +152,11 @@
 
 {#snippet composer(placeholder = '')}
 	<MessageInput
-		{selectedTerminalId}
-		{terminalSkills}
+		{selectedMachineId}
+		{machineSkills}
 		{chatId}
 		{onTemporaryChange}
-		bind:terminalContext
+		bind:machineContext
 		{callActive}
 		{callEnabled}
 		bind:this={messageInput}
@@ -207,7 +207,7 @@
 <div
 	class="w-full {$selectedFolder
 		? 'flex h-full min-h-0 flex-col overflow-hidden'
-		: 'm-auto max-w-[58rem] overflow-x-clip px-1 md:@3xl:px-20 translate-y-6 py-24'} text-center"
+		: 'm-auto max-w-[58rem] overflow-x-clip px-1 md:@3xl:px-20 py-24'} text-center"
 >
 	<!-- In a folder, temporary mode shows on the composer alone. -->
 	{#if $temporary && !$selectedFolder}
@@ -384,15 +384,20 @@
 		</div>
 
 		<div class="mx-auto max-w-2xl mt-3" in:fade={{ duration: 200, delay: 200 }}>
-			<div class="mx-5">
+			<!-- Held at the height of either list, so the centred composer doesn't jump when it arrives. -->
+			<div class="mx-5 min-h-[10.5rem]">
 				{#if showRecentChats}
-					<RecentChats chats={$recentChats} showIdentifier={!selectedSuggestionPrompts?.length} />
+					<div in:fade={{ duration: 150 }}>
+						<RecentChats chats={$recentChats} showIdentifier={!selectedSuggestionPrompts?.length} />
+					</div>
 				{:else if !waitingForRecentChats}
-					<Suggestions
-						suggestionPrompts={selectedSuggestionPrompts}
-						inputValue={prompt}
-						{onSelect}
-					/>
+					<div in:fade={{ duration: 150 }}>
+						<Suggestions
+							suggestionPrompts={selectedSuggestionPrompts}
+							inputValue={prompt}
+							{onSelect}
+						/>
+					</div>
 				{/if}
 			</div>
 		</div>

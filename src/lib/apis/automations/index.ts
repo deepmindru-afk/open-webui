@@ -2,7 +2,7 @@ import type { AgentModel } from '$lib/stores';
 import { WEBUI_API_BASE_URL } from '$lib/constants';
 import { extractInputVariables } from '$lib/utils';
 
-export type AutomationTerminalConfig = {
+export type AutomationMachineConfig = {
 	server_id: string;
 	cwd?: string;
 };
@@ -39,7 +39,8 @@ export type AutomationData = {
 	model_id: string;
 	/** Empty: no schedule. */
 	rrule: string;
-	terminal?: AutomationTerminalConfig;
+	machine?: AutomationMachineConfig;
+	terminal?: AutomationMachineConfig; // former name of machine, on automations saved before the rename
 	target?: AutomationTarget | null;
 	webhook?: AutomationWebhook | null;
 };
@@ -95,15 +96,42 @@ export type AutomationResponse = {
 	updated_at: number;
 	last_run: AutomationRunModel | null;
 	next_runs: number[] | null;
+
+	/** The owner, as on workspace items. */
+	user?: { id: string; name: string; role: string; email: string } | null;
+	/** Rename, reschedule, pause and run. What a run does stays the owner's: it runs as them. */
+	write_access?: boolean | null;
+	/** For the owner or an admin. */
+	access_grants?:
+		| { id?: string; principal_type: string; principal_id: string; permission: string }[]
+		| null;
+};
+
+export const updateAutomationAccessGrants = async (
+	token: string,
+	id: string,
+	accessGrants: any[]
+): Promise<AutomationResponse> => {
+	const res = await fetch(`${WEBUI_API_BASE_URL}/automations/${id}/access/update`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({ access_grants: accessGrants })
+	});
+	if (!res.ok) throw (await res.json())?.detail ?? res.statusText;
+	return res.json();
 };
 
 export const getAutomationModels = async (
 	token: string,
-	terminalId: string,
+	machineId: string,
 	cwd: string,
 	automationId?: string
 ): Promise<AgentModel[]> => {
-	const query = new URLSearchParams({ terminal_id: terminalId });
+	const query = new URLSearchParams({ machine_id: machineId });
 	if (cwd) query.set('cwd', cwd);
 	if (automationId) query.set('automation_id', automationId);
 	const response = await fetch(`${WEBUI_API_BASE_URL}/automations/models?${query}`, {
@@ -118,13 +146,18 @@ export const getAutomationItems = async (
 	query: string | null,
 	status: string | null,
 	page: number,
-	folder_id?: string | null
+	folder_id?: string | null,
+	/** 'all' is yours plus those shared with you directly. */
+	view: 'all' | 'mine' | 'shared' = 'all'
 ): Promise<{ items: AutomationResponse[]; total: number }> => {
 	let error = null;
 
 	const searchParams = new URLSearchParams();
 	if (query) {
 		searchParams.append('query', query);
+	}
+	if (view !== 'all') {
+		searchParams.append('view', view);
 	}
 	if (status && status !== 'all') {
 		searchParams.append('status', status);

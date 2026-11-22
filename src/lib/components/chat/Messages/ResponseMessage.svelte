@@ -62,7 +62,6 @@
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
-	import MCPApp from '$lib/components/chat/Messages/MCPApp.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
 	import { getChatContext } from '$lib/components/chat/context';
@@ -205,7 +204,14 @@
 	$: localizedModelName = model
 		? resolveLocalizedModelName(model, $i18n.language)
 		: message.modelName || message.model;
-	$: model = $models.find((m) => m.id === message.model);
+	$: model = ($models ?? []).find((m) => m.id === message.model);
+	$: selectedModel = message?.selectedModelId
+		? ($models ?? []).find((m) => m.id === message.selectedModelId)
+		: null;
+	$: selectedModelName = selectedModel
+		? resolveLocalizedModelName(selectedModel, $i18n.language)
+		: message?.selectedModelId;
+	$: showSelectedModel = !!message?.selectedModelId && message?.strategy !== 'random';
 	$: responseTimestamp = message?.meta?.response_ended_at ?? message?.timestamp;
 
 	$: statusEntries = message?.statusHistory ?? [...(message?.status ? [message?.status] : [])];
@@ -531,7 +537,7 @@
 					: {})
 			},
 			meta: {
-				arena: message ? message.arena : false,
+				strategy: message?.strategy ?? null,
 				model_id: message.model,
 				message_id: message.id,
 				message_index: messages.length,
@@ -546,7 +552,7 @@
 			feedbackItem.data.model_id,
 			...(feedbackItem.data.sibling_model_ids ?? [])
 		].reduce((acc, modelId) => {
-			const model = $models.find((m) => m.id === modelId);
+			const model = ($models ?? []).find((m) => m.id === modelId);
 			if (model) {
 				acc[model.id] = model?.info?.base_model_id ?? null;
 			} else {
@@ -589,12 +595,15 @@
 
 			if (!updatedMessage.annotation?.tags && (message?.content ?? '') !== '') {
 				// attempt to generate tags
-				const tags = await generateTags(localStorage.token, message.model, messages, chatId).catch(
-					(error) => {
-						console.error(error);
-						return [];
-					}
-				);
+				const tags = await generateTags(
+					localStorage.token,
+					message?.selectedModelId ?? message.model,
+					messages,
+					chatId
+				).catch((error) => {
+					console.error(error);
+					return [];
+				});
 				console.log(tags);
 
 				if (tags) {
@@ -653,8 +662,25 @@
 			const range = selection.getRangeAt(0);
 			const tempDiv = document.createElement('div');
 
+			// Copy formulas as TeX source, rendered KaTeX pastes garbled
+			const katexElements = [...document.querySelectorAll('.katex')].filter((katex) =>
+				selection.containsNode(katex, true)
+			);
+			const texNodes = katexElements.map((katex) => {
+				const tex = katex.querySelector('annotation[encoding="application/x-tex"]').textContent;
+				const texNode = document.createTextNode(
+					katex.closest('.katex-display') ? `$$${tex}$$` : `$${tex}$`
+				);
+				if (katex.contains(range.startContainer)) range.setStartBefore(katex);
+				if (katex.contains(range.endContainer)) range.setEndAfter(katex);
+				katex.before(texNode);
+				katex.style.display = 'none';
+				return texNode;
+			});
+
 			// Remove background, color, and font styles
 			tempDiv.appendChild(range.cloneContents());
+			tempDiv.querySelectorAll('.katex').forEach((katex) => katex.remove());
 
 			tempDiv.querySelectorAll('table').forEach((table) => {
 				table.style.borderCollapse = 'collapse';
@@ -670,6 +696,9 @@
 			// Put cleaned HTML + plain text into clipboard
 			e.clipboardData.setData('text/html', tempDiv.innerHTML);
 			e.clipboardData.setData('text/plain', selection.toString());
+
+			katexElements.forEach((katex) => (katex.style.display = ''));
+			texNodes.forEach((texNode) => texNode.remove());
 		}
 	};
 
@@ -723,10 +752,16 @@
 			{#if !compactPreview}
 				<Name>
 					<Tooltip content={localizedModelName} placement="top-start">
-						<span id="response-message-model-name" class="line-clamp-1 text-base-1000 dark:text-base-0">
+						<span
+							id="response-message-model-name"
+							class="line-clamp-1 text-base-1000 dark:text-base-0"
+						>
 							{localizedModelName}
 						</span>
 					</Tooltip>
+					{#if showSelectedModel}
+						<span class="truncate text-base-500">{selectedModelName}</span>
+					{/if}
 				</Name>
 			{/if}
 
@@ -782,7 +817,9 @@
 								{#each message.embeds as embed, idx}
 									<div class="my-2 w-full" id={`${message.id}-embeds-${idx}`}>
 										{#if typeof embed === 'object' && embed?.type === 'mcp_app'}
-											{#key JSON.stringify(embed)}<MCPApp app={embed} />{/key}
+											{#key JSON.stringify(embed)}{#await import('$lib/components/chat/Messages/MCPApp.svelte') then { default: MCPApp }}<MCPApp
+														app={embed}
+													/>{/await}{/key}
 										{:else if typeof embed === 'string'}
 											<FullHeightIframe
 												src={embed}

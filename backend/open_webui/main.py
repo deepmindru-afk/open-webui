@@ -41,6 +41,7 @@ from starsessions import (
 )
 from starsessions.stores.redis import RedisStore
 
+from open_webui.utils.machines import machine_id_of, normalize_machine_id
 from open_webui.config import (
     BYPASS_ADMIN_ACCESS_CONTROL,
     CACHE_DIR,
@@ -81,6 +82,7 @@ from open_webui.env import (
     BYPASS_MODEL_ACCESS_CONTROL,
     CHANGELOG,
     DEPLOYMENT_ID,
+    ENABLE_AUDIT_ANONYMOUS_REQUESTS,
     ENABLE_AUDIT_GET_REQUESTS,
     ENABLE_COMPRESSION_MIDDLEWARE,
     ENABLE_CUSTOM_MODEL_FALLBACK,
@@ -292,7 +294,7 @@ from open_webui.utils.tool_approval import (
     build_tool_approval_resume_payload,
     resolve_tool_call_output,
 )
-from open_webui.utils.tools import set_terminal_servers, set_tool_servers
+from open_webui.utils.tools import set_machines, set_tool_servers
 
 if SAFE_MODE:
     print('SAFE MODE ENABLED')
@@ -333,6 +335,9 @@ class SPAStaticFiles(StaticFiles):
         if full_path.endswith('.html'):
             # Stale cached HTML references chunks from an older build
             response.headers['Cache-Control'] = 'no-cache'
+        elif '/_app/immutable/' in str(full_path).replace(os.sep, '/'):
+            # Content-hashed build output never changes under the same name
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         return response
 
 
@@ -502,8 +507,8 @@ async def lifespan(app: FastAPI):
             log.warning(f'Failed to initialize tool servers at startup: {e}')
 
         try:
-            await set_terminal_servers(mock_request)
-            log.info('Initialized %s terminal server(s)', len(app.state.TERMINAL_SERVERS))
+            await set_machines(mock_request)
+            log.info('Initialized %s terminal server(s)', len(app.state.MACHINES))
         except Exception as e:
             log.warning(f'Failed to initialize terminal servers at startup: {e}')
 
@@ -610,9 +615,9 @@ app.state.OPENAI_MODELS = {}
 
 app.state.TOOL_SERVERS = []
 
-# Terminal server
+# Machines
 
-app.state.TERMINAL_SERVERS = []
+app.state.MACHINES = []
 
 # SCIM
 
@@ -663,12 +668,6 @@ async def initialize_runtime_config(app: FastAPI):
                         server_id,
                         f'{type(e).__name__}: {e}' if str(e) else type(e).__name__,
                     )
-
-    arena_models = await Config.get('evaluation.arena.models', []) or []
-    if any('access_control' in m.get('meta', {}) for m in arena_models):
-        for model in arena_models:
-            migrate_access_control(model.get('meta', {}))
-        await Config.upsert({'evaluation.arena.models': arena_models})
 
     app.state.EMBEDDING_FUNCTION = None
     app.state.RERANKING_FUNCTION = None
@@ -788,6 +787,7 @@ if audit_level != AuditLevel.NONE:
         excluded_paths=AUDIT_EXCLUDED_PATHS,
         included_paths=AUDIT_INCLUDED_PATHS,
         audit_get_requests=ENABLE_AUDIT_GET_REQUESTS,
+        audit_anonymous_requests=ENABLE_AUDIT_ANONYMOUS_REQUESTS,
         max_body_size=MAX_BODY_LOG_SIZE,
     )
 
@@ -860,10 +860,6 @@ if ENABLE_ADMIN_ANALYTICS:
     app.include_router(analytics.router, prefix='/api/v1/analytics', tags=['analytics'])
 app.include_router(utils.router, prefix='/api/v1/utils', tags=['utils'])
 app.include_router(machines.router, prefix='/api/v1/machines', tags=['machines'])
-# Deprecated: Terminals became Machines. Kept so older clients and links keep working.
-app.include_router(
-    machines.router, prefix='/api/v1/terminals', tags=['machines'], deprecated=True, include_in_schema=False
-)
 app.include_router(automations.router, prefix='/api/v1/automations', tags=['automations'])
 app.include_router(calendar.router, prefix='/api/v1/calendars', tags=['calendars'])
 
@@ -880,7 +876,8 @@ if ENABLE_SCIM:
 async def get_models(
     request: Request,
     refresh: bool = False,
-    terminal_id: str | None = None,
+    machine_id: str | None = None,
+    terminal_id: str | None = None,  # former name of machine_id
     chat_id: str | None = None,
     cwd: str | None = None,
     user=Depends(get_verified_user),
@@ -934,12 +931,13 @@ async def get_models(
         log.debug(
             f'/api/models returned filtered models accessible to the user: {JSONCodec.dumps([model.get("id") for model in models])}'
         )
-    if terminal_id:
+    machine_id = machine_id or terminal_id
+    if machine_id:
         from open_webui.utils.agents.discovery import get_models as get_agent_models
 
         try:
             models.extend(
-                await get_agent_models(request, user, {'terminal_id': terminal_id, 'chat_id': chat_id}, cwd=cwd)
+                await get_agent_models(request, user, {'machine_id': machine_id, 'chat_id': chat_id}, cwd=cwd)
             )
         except Exception as exc:
             log.debug('Agent discovery unavailable: %s', type(exc).__name__)
@@ -1080,7 +1078,7 @@ async def embeddings(request: Request, form_data: dict, user=Depends(get_verifie
 
     This handler:
       - Performs user/model checks and dispatches to the correct backend.
-      - Supports OpenAI, Ollama, arena models, pipelines, and any compatible provider.
+      - Supports OpenAI, Ollama, router models, pipelines, and any compatible provider.
 
     Args:
         request (Request): Request context.
@@ -1110,16 +1108,20 @@ async def chat_completion(
     model_id = form_data.get('model', None)
     request.state.model_id = model_id
     tasks = form_data.pop('background_tasks', None)
+    normalize_machine_id(form_data)
 
-    from open_webui.utils.machines import get_folder_terminal_defaults, initialize_terminal_directory
+    from open_webui.utils.machines import get_folder_machine_defaults, initialize_machine_directory
 
     folder_defaults = {}
-    requested_directory = form_data.pop('terminal_cwd', None)
+    requested_directory = form_data.pop('machine_cwd', None)
+    legacy_directory = form_data.pop('terminal_cwd', None)  # former name
+    if requested_directory is None:
+        requested_directory = legacy_directory
     if 'parent_id' in form_data and form_data['parent_id'] is None and not form_data.get('chat_id'):
-        folder_defaults = await get_folder_terminal_defaults(user, form_data.get('folder_id'))
-        if 'terminal_id' not in form_data and folder_defaults.get('terminal_id'):
-            form_data['terminal_id'] = folder_defaults['terminal_id']
-        if requested_directory is None and form_data.get('terminal_id') == folder_defaults.get('terminal_id'):
+        folder_defaults = await get_folder_machine_defaults(user, form_data.get('folder_id'))
+        if 'machine_id' not in form_data and folder_defaults.get('machine_id'):
+            form_data['machine_id'] = folder_defaults['machine_id']
+        if requested_directory is None and form_data.get('machine_id') == folder_defaults.get('machine_id'):
             requested_directory = folder_defaults.get('working_directory')
     else:
         requested_directory = None
@@ -1140,7 +1142,7 @@ async def chat_completion(
         )
         agent_model = next((item for item in candidates if item['id'] == model_id), None)
         if agent_model is None:
-            raise HTTPException(400, 'Agent model is unavailable in the selected terminal')
+            raise HTTPException(400, 'Agent model is unavailable on the selected machine')
 
     metadata = {}
     try:
@@ -1265,7 +1267,7 @@ async def chat_completion(
             message_ids = [{'model_id': model_id, 'message_id': form_data.pop('id', None)}]
 
         user_message = form_data.pop('user_message', None) or form_data.pop('parent_message', None)
-        if any(str(entry.get('model_id', '')).startswith('agent:') for entry in message_ids):
+        if any(str(assistant_message.get('model_id', '')).startswith('agent:') for assistant_message in message_ids):
             if agent_model is None or len(message_ids) != 1 or message_ids[0]['model_id'] != model_id:
                 raise HTTPException(400, 'Use one agent at a time in a conversation')
         chat_id = form_data.pop('chat_id', None) or ''
@@ -1339,6 +1341,15 @@ async def chat_completion(
         if is_new_chat:
             metadata['chat_id'] = str(uuid4())
 
+        # New replies are saved with their task and start in the same write as the turn.
+        for assistant_message in message_ids:
+            assistant_message['meta'] = {
+                **({'task_id': str(uuid4())} if metadata.get('session_id') else {}),
+                'response_started_at': time.time(),
+            }
+            # Agent models disappear with their machine.
+            assistant_message['modelName'] = agent_model['name'] if agent_model else None
+
         if is_temporary_chat_id(metadata.get('chat_id')):
             session_id = metadata.get('session_id')
             if not isinstance(session_id, str) or not await register_temporary_chat_session(
@@ -1388,8 +1399,8 @@ async def chat_completion(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=ERROR_MESSAGES.DEFAULT(),
                             )
-                for entry in message_ids:
-                    target_message_id = entry.get('message_id')
+                for assistant_message in message_ids:
+                    target_message_id = assistant_message.get('message_id')
                     if not target_message_id:
                         continue
                     target_message = await Messages.get_message_by_id(target_message_id)
@@ -1418,7 +1429,11 @@ async def chat_completion(
                     user_message_id = user_message.get('id') if user_message else None
 
                     history_messages = {}
-                    all_assistant_ids = [entry['message_id'] for entry in message_ids if entry.get('message_id')]
+                    all_assistant_ids = [
+                        assistant_message['message_id']
+                        for assistant_message in message_ids
+                        if assistant_message.get('message_id')
+                    ]
 
                     if user_message_id and user_message:
                         user_message['childrenIds'] = all_assistant_ids
@@ -1426,11 +1441,11 @@ async def chat_completion(
                         user_message['user'] = {'id': user.id, 'name': user.name}
                         history_messages[user_message_id] = user_message
 
-                    for entry in message_ids:
-                        target_model_id = entry['model_id']
-                        assistant_message_id = entry['message_id']
+                    for assistant_message in message_ids:
+                        target_model_id = assistant_message['model_id']
+                        assistant_message_id = assistant_message['message_id']
                         if assistant_message_id:
-                            assistant_message = {
+                            placeholder = {
                                 'id': assistant_message_id,
                                 'parentId': user_message_id,
                                 'childrenIds': [],
@@ -1439,12 +1454,18 @@ async def chat_completion(
                                 'done': False,
                                 'model': target_model_id,
                                 'timestamp': int(time.time()),
+                                'meta': assistant_message['meta'],
+                                **(
+                                    {'modelName': assistant_message['modelName']}
+                                    if assistant_message['modelName']
+                                    else {}
+                                ),
                             }
                             # Preserve the side-by-side column index so duplicate
                             # models don't collapse into one another on reload.
-                            if entry.get('modelIdx') is not None:
-                                assistant_message['modelIdx'] = entry['modelIdx']
-                            history_messages[assistant_message_id] = assistant_message
+                            if assistant_message.get('modelIdx') is not None:
+                                placeholder['modelIdx'] = assistant_message['modelIdx']
+                            history_messages[assistant_message_id] = placeholder
 
                     await Chats.insert_new_chat(
                         chat_id,
@@ -1453,9 +1474,8 @@ async def chat_completion(
                             chat={
                                 'id': chat_id,
                                 'title': 'New Chat',
-                                'models': [entry['model_id'] for entry in message_ids],
-                                'terminal_id': (model.get('agent') or {}).get('terminal_id')
-                                or form_data.get('terminal_id'),
+                                'models': [assistant_message['model_id'] for assistant_message in message_ids],
+                                'machine_id': machine_id_of(model.get('agent')) or form_data.get('machine_id'),
                                 'working_directory': requested_directory or '',
                                 'history': {
                                     'currentId': all_assistant_ids[0] if all_assistant_ids else user_message_id,
@@ -1494,8 +1514,8 @@ async def chat_completion(
                                 'content_preview': user_message.get('content', '')[:300],
                             },
                         )
-                    for entry in message_ids:
-                        assistant_message_id = entry.get('message_id')
+                    for assistant_message in message_ids:
+                        assistant_message_id = assistant_message.get('message_id')
                         if assistant_message_id:
                             await publish_event(
                                 request,
@@ -1505,7 +1525,7 @@ async def chat_completion(
                                 data={
                                     'chat_id': chat_id,
                                     'role': 'assistant',
-                                    'model': entry.get('model_id'),
+                                    'model': assistant_message.get('model_id'),
                                 },
                             )
 
@@ -1577,7 +1597,10 @@ async def chat_completion(
                         message = await Chats.get_message_by_id_and_message_id(chat_id, assistant_message_id)
                         if not message or (message.get('user_id') or chat.user_id) != user.id:
                             raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-                        if any(entry.get('message_id') != assistant_message_id for entry in message_ids):
+                        if any(
+                            assistant_message.get('message_id') != assistant_message_id
+                            for assistant_message in message_ids
+                        ):
                             raise HTTPException(status_code=400, detail='Invalid response ID.')
                         metadata['user_message_id'] = message.get('parentId')
                     else:
@@ -1617,7 +1640,7 @@ async def chat_completion(
 
                     if chat.user_id == user.id:
                         selected_chat_models = user_message.get('models') or [
-                            entry['model_id'] for entry in message_ids
+                            assistant_message['model_id'] for assistant_message in message_ids
                         ]
                         chat_fields = {'models': selected_chat_models}
                         if metadata.get('files') is not None:
@@ -1655,21 +1678,27 @@ async def chat_completion(
             detail=str(e),
         )
 
+    async def continue_assistant_message(message_id, task_id):
+        """Mark a continued assistant message as running under its new task, before the task starts."""
+        if not (is_saved_chat_id(metadata.get('chat_id')) and metadata.get('assistant_message_id')):
+            return
+        async with Chats.edit_message_output(metadata['chat_id'], message_id) as message:
+            if message is not None:
+                # Continuations retain the original start, including approval pauses.
+                # A historical response without a recorded start remains unknown.
+                response_meta = dict(message.get('meta') or {})
+                response_meta.pop('response_ended_at', None)
+                if task_id:
+                    response_meta['task_id'] = task_id
+                message['meta'] = response_meta
+                message['done'] = False
+                if agent_model:
+                    message['modelName'] = agent_model['name']
+
     async def process_chat(request, form_data, user, metadata, model, tasks=None):
         error_detail = None
         try:
             try:
-                if is_saved_chat_id(metadata.get('chat_id')) and metadata.get('message_id'):
-                    async with Chats.edit_message_output(metadata['chat_id'], metadata['message_id']) as message:
-                        if message is not None:
-                            response_meta = dict(message.get('meta') or {})
-                            # Continuations retain the original start, including approval pauses.
-                            # A historical response without a recorded start remains unknown.
-                            if not metadata.get('assistant_message_id'):
-                                response_meta['response_started_at'] = time.time()
-                            response_meta.pop('response_ended_at', None)
-                            message['meta'] = response_meta
-                            message['done'] = False
                 target = (
                     model_info if form_data['model'] == model_id else await Models.get_model_by_id(form_data['model'])
                 )
@@ -1683,8 +1712,8 @@ async def chat_completion(
                 )
                 ctx = None
                 if is_new_chat:
-                    await initialize_terminal_directory(
-                        request, user, metadata, form_data.get('terminal_id'), requested_directory
+                    await initialize_machine_directory(
+                        request, user, metadata, form_data.get('machine_id'), requested_directory
                     )
                 if model.get('agent'):
                     from open_webui.utils.agents.runner import run as run_agent
@@ -1848,9 +1877,9 @@ async def chat_completion(
         is_internal = getattr(request.state, 'internal', False) is True
         chat_id = metadata['chat_id']
 
-        for idx, entry in enumerate(message_ids):
-            target_model_id = entry['model_id']
-            assistant_message_id = entry['message_id']
+        for idx, assistant_message in enumerate(message_ids):
+            target_model_id = assistant_message['model_id']
+            assistant_message_id = assistant_message['message_id']
             if not assistant_message_id:
                 continue
 
@@ -1860,23 +1889,14 @@ async def chat_completion(
             # Per-model metadata: own message_id + model
             per_model_metadata = {
                 **metadata,
-                'model_id': entry['model_id'],
+                'model_id': assistant_message['model_id'],
                 'chat_context': copy.deepcopy(metadata['chat_context']),
                 'message_id': assistant_message_id,
-                'task_id': str(uuid4()),
+                'task_id': assistant_message['meta']['task_id'],
             }
 
-            if is_saved_chat_id(chat_id):
-                await Chats.upsert_message_to_chat_by_id_and_message_id(
-                    chat_id,
-                    assistant_message_id,
-                    {
-                        'meta': {'task_id': per_model_metadata['task_id']},
-                        # Agent models disappear with their terminal.
-                        **({'modelName': agent_model['name']} if agent_model else {}),
-                    },
-                    touch=False,
-                )
+            # New replies were saved with their task; a continuation is saved before its task runs.
+            await continue_assistant_message(assistant_message_id, assistant_message['meta']['task_id'])
 
             # Per-model form_data: own model
             model_form_data = {
@@ -1946,6 +1966,8 @@ async def chat_completion(
         # Legacy/direct: single model, synchronous
         metadata['message_id'] = message_ids[0]['message_id']
         try:
+            if metadata['message_id']:
+                await continue_assistant_message(metadata['message_id'], message_ids[0]['meta'].get('task_id'))
             return await process_chat(request, form_data, user, metadata, model, tasks)
         except HTTPException:
             raise
@@ -2493,7 +2515,7 @@ async def get_app_config(request: Request):
                     'enable_tools': ENABLE_TOOLS,
                     'enable_functions': ENABLE_FUNCTIONS,
                     'enable_tool_servers': ENABLE_TOOL_SERVERS,
-                    'enable_terminal_servers': ENABLE_TOOL_SERVERS
+                    'enable_machines': ENABLE_TOOL_SERVERS
                     and any(connection.get('enabled', True) for connection in config.get('machines.connections') or []),
                     'enable_folders': config.get('folders.enable'),
                     'folder_max_file_count': config.get('folders.max_file_count'),

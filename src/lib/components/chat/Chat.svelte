@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { getTerminalServers } from '$lib/apis/machines';
+	import { getMachines } from '$lib/apis/machines';
 	import { resolveToolApprovalMode } from '$lib/utils/toolPermissions';
-	import type { AppLayoutContext, TerminalContext } from '$lib/types';
+	import type { AppLayoutContext, MachineContext } from '$lib/types';
 	import { setChatContext } from './context';
 	import {
 		estimateTokens,
@@ -48,13 +48,13 @@
 		chatTitle as _chatTitle,
 		tools,
 		skills,
-		terminalSkills as _terminalSkills,
-		terminalServers,
+		machineSkills as _machineSkills,
+		machines,
 		functions,
 		selectedFolder as _selectedFolder,
 		folders as _folders,
 		showEmbeds as _showEmbeds,
-		selectedTerminalId as _selectedTerminalId,
+		selectedMachineId as _selectedMachineId,
 		showFileNavPath,
 		showFileNavDir,
 		chatRequestQueues,
@@ -123,8 +123,8 @@
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
 	import {
-		listTerminalSkills,
-		resolveTerminalTarget,
+		listMachineSkills,
+		resolveMachineTarget,
 		setCwd,
 		type FilesystemFile
 	} from '$lib/apis/machines';
@@ -179,6 +179,13 @@
 	import ShareChatModal from './ShareChatModal.svelte';
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
+	import {
+		isMachine,
+		isMachineRef,
+		machineEventName,
+		machineIdOf,
+		metaMachineIdOf
+	} from '$lib/utils/machines';
 
 	export let chatIdProp = '';
 	export let initialPage = '';
@@ -201,8 +208,8 @@
 	// the call lives in the main chat's voice tab, so a side chat is never in it
 	const voiceCall = embedded ? writable(false) : _voiceCall;
 	const showEmbeds = embedded ? writable(false) : _showEmbeds;
-	const selectedTerminalId = tabbed ? writable(get(_selectedTerminalId)) : _selectedTerminalId;
-	const terminalSkills = tabbed ? writable<any[]>([]) : _terminalSkills;
+	const selectedMachineId = tabbed ? writable(get(_selectedMachineId)) : _selectedMachineId;
+	const machineSkills = tabbed ? writable<any[]>([]) : _machineSkills;
 	const models = tabbed ? writable(get(_models)) : _models;
 	setChatContext({
 		chatId,
@@ -210,15 +217,15 @@
 		temporary: temporaryChat,
 		audioQueue,
 		submitPrompt: (prompt) => submitHandler(prompt),
-		getCurrentDirectory: (terminalId) => tabs?.getCurrentDirectory(terminalId)
+		getCurrentDirectory: (machineId) => tabs?.getCurrentDirectory(machineId)
 	});
 	export let embeddedTitle = '';
 	export let embeddedChats = [];
 	export let embeddedDraftKey = '';
 	export let embeddedDraft: {
 		controls?: ReturnType<typeof getChatInputControls>;
-		terminalId?: string | null;
-		terminalContext?: TerminalContext | null;
+		machineId?: string | null;
+		machineContext?: MachineContext | null;
 		chatVariables?: Record<string, any>;
 		submit?: boolean;
 		selectedModels: string[];
@@ -298,10 +305,10 @@
 	let messagesRef: Messages | undefined;
 
 	let autoScroll = true;
-	let lastScrollTop = 0;
-	let isNearTop = true;
 	let processing = '';
 	let messagesContainerElement: HTMLDivElement;
+	$: lastScrollTop = messagesContainerElement?.scrollTop ?? 0;
+	$: isNearTop = lastScrollTop <= 100;
 
 	let showEventConfirmation = false;
 	let pendingUrlActions: { urls: string[]; call: boolean } | null = null;
@@ -346,7 +353,7 @@
 		: ($selectedFolder as { meta?: { background_image_url?: string } } | null)?.meta
 				?.background_image_url ||
 			atSelectedModel?.info?.meta?.background_image_url ||
-			$models.find((model) => model.id === selectedModels[selectedModelIdx])?.info?.meta
+			($models ?? []).find((model) => model.id === selectedModels[selectedModelIdx])?.info?.meta
 				?.background_image_url ||
 			($settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url);
 
@@ -364,12 +371,12 @@
 		if (
 			modelIds.some(
 				(id) =>
-					id.startsWith('agent:') && decodeURIComponent(id.split(':')[1]) === $selectedTerminalId
+					id.startsWith('agent:') && decodeURIComponent(id.split(':')[1]) === $selectedMachineId
 			)
 		)
 			return modelIds;
 		const selected = resolveDefaultModelIds(
-			$models,
+			$models ?? [],
 			modelIds,
 			$settings?.models,
 			$config?.default_models?.split(',')
@@ -383,7 +390,7 @@
 
 		if (
 			chatIdProp === '' &&
-			$models.length > 0 &&
+			($models ?? []).length > 0 &&
 			!selectedModels?.some((modelId) => modelId) &&
 			!modelSearchParam
 		) {
@@ -464,7 +471,7 @@
 	$: contextThreshold = contextCompactionEnabled
 		? (getContextThreshold(
 				atSelectedModel?.id ?? selectedModels.find((id) => id),
-				$models,
+				$models ?? [],
 				params
 			) ??
 			serverContextUsage?.threshold ??
@@ -501,7 +508,8 @@
 		const currentModels = atSelectedModel?.id ? [atSelectedModel.id] : selectedModels;
 		const allModelsSupportWebSearch =
 			currentModels.filter(
-				(model) => $models.find((m) => m.id === model)?.info?.meta?.capabilities?.web_search ?? true
+				(model) =>
+					($models ?? []).find((m) => m.id === model)?.info?.meta?.capabilities?.web_search ?? true
 			).length === currentModels.length;
 
 		webSearchActive = Boolean(
@@ -645,7 +653,7 @@
 	export let prompt = '';
 	let chatFiles: any[] = [];
 	export let files: any[] = [];
-	let terminalContext: TerminalContext | null = null;
+	let machineContext: MachineContext | null = null;
 	const askFile = async (instruction: string, file: FilesystemFile) => {
 		if (selectedModels.includes('')) throw new Error($i18n.t('Model not selected'));
 		const attachments = [structuredClone(file)];
@@ -1096,7 +1104,7 @@
 	const initEmbeddedDraft = async () => {
 		const signal = startChatLoad();
 		modelDefaults = null;
-		terminalContext = null;
+		machineContext = null;
 		clearTimeout(saveControlsTimer);
 		await saveControls();
 
@@ -1140,8 +1148,8 @@
 
 		if (embeddedDraft?.controls) {
 			chatVariables = embeddedDraft.chatVariables ?? {};
-			selectedTerminalId.set(embeddedDraft.terminalId ?? null);
-			terminalContext = embeddedDraft.terminalContext ?? null;
+			selectedMachineId.set(embeddedDraft.machineId ?? null);
+			machineContext = embeddedDraft.machineContext ?? null;
 			applyChatInputControls(embeddedDraft.controls);
 		}
 		await setDefaults(!!embeddedDraft?.controls);
@@ -1242,42 +1250,42 @@
 		}
 	};
 
-	/** Check whether a terminal ID references an available terminal. */
-	const isTerminalAvailable = (tid: string): boolean => {
+	/** Check whether a machine ID references an available machine. */
+	const isMachineAvailable = (tid: string): boolean => {
 		return (
 			$config?.features?.enable_tool_servers === true &&
-			($terminalServers ?? []).some((t) => !!tid && t.id === tid)
+			($machines ?? []).some((t) => !!tid && t.id === tid)
 		);
 	};
 
 	$: if (
 		$temporaryChat &&
-		($terminalServers ?? []).some(
-			(t) => !!$selectedTerminalId && t.id === $selectedTerminalId && t.scope === 'chat'
+		($machines ?? []).some(
+			(t) => !!$selectedMachineId && t.id === $selectedMachineId && t.scope === 'chat'
 		)
 	) {
-		selectedTerminalId.set(null);
+		selectedMachineId.set(null);
 	}
 
-	let lastTerminalSkillSelector: string | null = null;
+	let lastMachineSkillSelector: string | null = null;
 
 	let appliedFolderDefaults: FolderDetails['data'] = null;
 	let loadedAgentEnvironment: { key: string; models: Model[] } | null = null;
-	$: setFolderModelConnections($terminalServers);
+	$: setFolderModelConnections($machines);
 
 	const getAgentEnvironment = () => {
-		const terminalId = $selectedTerminalId;
-		const directory = terminalContext?.currentDirectory;
-		return terminalId && directory
+		const machineId = $selectedMachineId;
+		const directory = machineContext?.currentDirectory;
+		return machineId && directory
 			? JSON.stringify([
-					terminalId,
+					machineId,
 					directory,
-					($terminalServers ?? []).find((server) => server.id === terminalId)?.scope === 'chat'
+					($machines ?? []).find((server) => server.id === machineId)?.scope === 'chat'
 						? $chatId
 						: null,
 					$config,
 					$settings,
-					$terminalServers
+					$machines
 				])
 			: null;
 	};
@@ -1286,15 +1294,14 @@
 		folder: FolderDetails | null = null,
 		signal = chatLoadController.signal
 	) => {
-		const terminalId = $selectedTerminalId;
+		const machineId = $selectedMachineId;
 		const environment = folder ? null : getAgentEnvironment();
 		loadedAgentEnvironment = null;
 		const retained = folder ? getFolderAgentModels(folder) : null;
 		models.update((available) => [
-			...available.filter(
+			...(available ?? []).filter(
 				(model) =>
-					model.owned_by !== 'terminal' ||
-					(!folder && model.agent.terminal_id === $selectedTerminalId)
+					!isMachine(model.owned_by) || (!folder && machineIdOf(model.agent) === $selectedMachineId)
 			),
 			...(retained ?? [])
 		]);
@@ -1304,22 +1311,22 @@
 				const discovered = folder
 					? await loadFolderAgentModels(localStorage.token, folder, !!retained)
 					: await getModels(localStorage.token, false, false, {
-							terminalId,
+							machineId,
 							chatId: $chatId,
-							cwd: terminalContext?.currentDirectory ?? null
+							cwd: machineContext?.currentDirectory ?? null
 						});
-				if (signal.aborted || terminalId !== $selectedTerminalId) return;
+				if (signal.aborted || machineId !== $selectedMachineId) return;
 				if (
 					folder &&
 					($selectedFolder?.id !== folder.id ||
-						$selectedTerminalId !== folder.data?.terminal_id ||
-						terminalContext?.currentDirectory !== (folder.data?.working_directory ?? '') ||
+						$selectedMachineId !== machineIdOf(folder.data) ||
+						machineContext?.currentDirectory !== (folder.data?.working_directory ?? '') ||
 						!getFolderAgentModels(folder))
 				)
 					return;
 
 				const available = folder
-					? [...$models.filter((model) => model.owned_by !== 'terminal'), ...discovered]
+					? [...($models ?? []).filter((model) => !isMachine(model.owned_by)), ...discovered]
 					: discovered;
 				models.set(available);
 				loadedAgentEnvironment = environment ? { key: environment, models: available } : null;
@@ -1329,7 +1336,7 @@
 					(id) =>
 						!id.startsWith('agent:') ||
 						(chat?.chat?.models?.includes(id) &&
-							decodeURIComponent(id.split(':')[1]) === $selectedTerminalId) ||
+							decodeURIComponent(id.split(':')[1]) === $selectedMachineId) ||
 						available.some((model: Model) => model.id === id)
 				);
 				selectedModels =
@@ -1344,40 +1351,40 @@
 		else await refresh();
 	};
 
-	$: if ($selectedTerminalId !== lastTerminalSkillSelector) {
-		if (terminalContext?.terminalId !== $selectedTerminalId) terminalContext = null;
-		selectedSkillIds = selectedSkillIds.filter((id) => !id.startsWith('terminal:'));
-		terminalSkills.set([]);
-		lastTerminalSkillSelector = $selectedTerminalId;
+	$: if ($selectedMachineId !== lastMachineSkillSelector) {
+		if (machineContext?.machineId !== $selectedMachineId) machineContext = null;
+		selectedSkillIds = selectedSkillIds.filter((id) => !isMachineRef(id));
+		machineSkills.set([]);
+		lastMachineSkillSelector = $selectedMachineId;
 		// Folder initialization already requests this exact environment.
 		if (
 			!(
 				(loading || !history.currentId) &&
-				$selectedFolder?.data?.terminal_id === $selectedTerminalId
+				machineIdOf($selectedFolder?.data) === $selectedMachineId
 			)
 		) {
 			void refreshAgentModels();
 		}
 	}
 
-	// Sent skill mentions and the + menu's Skills entry need the terminal's skills before any list opens.
+	// Sent skill mentions and the + menu's Skills entry need the machine's skills before any list opens.
 	$: {
-		const terminalId = $selectedTerminalId;
-		void listTerminalSkills(
-			resolveTerminalTarget(terminalId, $terminalServers ?? [], localStorage.token, {
+		const machineId = $selectedMachineId;
+		void listMachineSkills(
+			resolveMachineTarget(machineId, $machines ?? [], localStorage.token, {
 				chatId: $chatId || null,
 				modelId: selectedModels[0] ?? null
 			})
 		).then((items) => {
-			if (terminalId === $selectedTerminalId) terminalSkills.set(items);
+			if (machineId === $selectedMachineId) machineSkills.set(items);
 		});
 	}
 
-	const applyFolderTerminal = (folder: any) => {
-		const terminalId = folder?.data?.terminal_id;
-		if (!terminalId) return;
-		selectedTerminalId.set(terminalId);
-		terminalContext = { terminalId, currentDirectory: folder.data?.working_directory ?? '' };
+	const applyFolderMachine = (folder: any) => {
+		const machineId = machineIdOf(folder?.data);
+		if (!machineId) return;
+		selectedMachineId.set(machineId);
+		machineContext = { machineId, currentDirectory: folder.data?.working_directory ?? '' };
 	};
 
 	let defaultsModelIds: string[] = [];
@@ -1404,7 +1411,9 @@
 			)
 				return;
 
-			const currentModels: any[] = modelIds.map((id) => $models.find((model) => model.id === id));
+			const currentModels: any[] = modelIds.map((id) =>
+				($models ?? []).find((model) => model.id === id)
+			);
 			if (!currentModels.length || currentModels.some((model) => !model)) return;
 			const supports = (feature: string) =>
 				currentModels.every((model) => model.info?.meta?.capabilities?.[feature] ?? true);
@@ -1419,11 +1428,11 @@
 			) =>
 				featureAvailable(feature) &&
 				currentModels.every((model) => model.info?.meta?.defaultFeatureIds?.includes(feature));
-			// Loading a saved chat must preserve its terminal, including an explicit deselection.
-			const terminalId =
+			// Loading a saved chat must preserve its machine, including an explicit deselection.
+			const machineId =
 				(loading && $chatId) || (!history.currentId && $selectedFolder)
 					? null
-					: currentModels[0]?.info?.meta?.terminalId;
+					: metaMachineIdOf(currentModels[0]?.info?.meta);
 			const defaults: Record<string, any> = {
 				selectedToolIds: [
 					...new Set(
@@ -1466,12 +1475,12 @@
 				)
 					? (currentModels[0]?.info?.meta?.videoModelId ?? '')
 					: '',
-				terminalId:
-					terminalId &&
-					isTerminalAvailable(terminalId) &&
-					currentModels.every((model) => model.info?.meta?.terminalId === terminalId)
-						? terminalId
-						: $selectedTerminalId
+				machineId:
+					machineId &&
+					isMachineAvailable(machineId) &&
+					currentModels.every((model) => metaMachineIdOf(model.info?.meta) === machineId)
+						? machineId
+						: $selectedMachineId
 			};
 
 			if (preserveSelections) {
@@ -1485,7 +1494,7 @@
 					codeInterpreterEnabled,
 					selectedImageModelId,
 					selectedVideoModelId,
-					terminalId: $selectedTerminalId
+					machineId: $selectedMachineId
 				};
 				if (!modelDefaults) {
 					modelDefaults = structuredClone(defaults);
@@ -1504,7 +1513,7 @@
 							...new Set([...defaults[key].filter((id: string) => !removed.includes(id)), ...added])
 						];
 					} else if (
-						(key !== 'terminalId' || equal(modelIds, defaultsModelIds)) &&
+						(key !== 'machineId' || equal(modelIds, defaultsModelIds)) &&
 						current[key] !== previous
 					) {
 						defaults[key] = current[key];
@@ -1526,9 +1535,9 @@
 			defaults.videoGenerationEnabled &&= !!featureAvailable('video_generation');
 			defaults.codeInterpreterEnabled &&= !!featureAvailable('code_interpreter');
 			if (!currentModels.some((model) => model.info?.meta?.capabilities?.terminal ?? true)) {
-				defaults.terminalId = null;
+				defaults.machineId = null;
 			}
-			if (defaults.terminalId) defaults.codeInterpreterEnabled = false;
+			if (defaults.machineId) defaults.codeInterpreterEnabled = false;
 			defaultsModelIds = modelIds;
 			({
 				selectedToolIds,
@@ -1541,7 +1550,7 @@
 				selectedImageModelId,
 				selectedVideoModelId
 			} = defaults);
-			selectedTerminalId.set(defaults.terminalId);
+			selectedMachineId.set(defaults.machineId);
 
 			pendingOAuthTools = [];
 			selectedToolIds = selectedToolIds.filter((id) => {
@@ -1613,24 +1622,25 @@
 		});
 	};
 
-	const terminalEventHandler = (type: string, data: any, message: any) => {
+	const machineEventHandler = (type: string, data: any, message: any) => {
 		const attachment = history.messages[message?.parentId]?.files?.find(
 			(file: any) => file.type === 'filesystem'
 		);
 		if (attachment) {
-			if (attachment.terminal_id && attachment.terminal_id !== $selectedTerminalId) return;
-			if (type === 'terminal:display_file' && terminalContext?.file?.path === data.path)
+			if (machineIdOf(attachment) && machineIdOf(attachment) !== $selectedMachineId) return;
+			if (machineEventName(type) === 'display_file' && machineContext?.file?.path === data.path)
 				showFileNavDir.set(data.path);
 			return;
 		}
-		if (type === 'terminal:display_file') {
+		const event = machineEventName(type);
+		if (event === 'display_file') {
 			if (!data?.path) return;
-			if ($settings?.terminalFileDisplay === 'inline') return;
+			if (($settings?.machineFileDisplay ?? $settings?.terminalFileDisplay) === 'inline') return;
 			displayFileHandler(data.path, { showTabs, showFileNavPath }, { page: data?.page });
-		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
+		} else if (event === 'write_file' || event === 'replace_file_content') {
 			if (!data?.path) return;
 			showFileNavDir.set(data.path);
-		} else if (type === 'terminal:run_command' && !terminalContext?.file) {
+		} else if (event === 'run_command' && !machineContext?.file) {
 			showFileNavDir.set('/');
 		}
 	};
@@ -2100,8 +2110,8 @@
 					eventConfirmationInputValue = data?.value ?? '';
 					eventConfirmationInputType = data?.input?.type ?? data?.type ?? '';
 					eventConfirmationInputOptions = data?.input?.options ?? data?.options ?? [];
-				} else if (type.startsWith('terminal:')) {
-					terminalEventHandler(type, data, message);
+				} else if (machineEventName(type)) {
+					machineEventHandler(type, data, message);
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -2290,8 +2300,8 @@
 			)
 				return;
 			appliedFolderDefaults = folder.data;
-			applyFolderTerminal(folder);
-			if (folder.data?.terminal_id) await refreshAgentModels(folder);
+			applyFolderMachine(folder);
+			if (machineIdOf(folder.data)) await refreshAgentModels(folder);
 			if (
 				history.currentId ||
 				$selectedFolder?.id !== folder.id ||
@@ -2334,7 +2344,7 @@
 		if (embedded) init();
 		else
 			void tick().then(() => {
-				if (!routeInitialized) void followRoute();
+				if (!routeInitialized) routeChanged = true;
 			});
 
 		return () => {
@@ -2771,12 +2781,12 @@
 			context: () => {
 				const model =
 					selectedModelIds.length === 1
-						? $models.find((model) => model.id === selectedModelIds[0])
+						? ($models ?? []).find((model) => model.id === selectedModelIds[0])
 						: null;
 				return {
 					chatId: isTemporaryChatId($chatId) ? undefined : $chatId || undefined,
 					modelId: model ? model.id : '',
-					terminalId: $selectedTerminalId || undefined,
+					machineId: $selectedMachineId || undefined,
 					voiceModel: $config?.audio?.realtime?.model,
 					voice: model?.info?.meta?.voice?.voice || $config?.audio?.realtime?.voice,
 					messages: createMessagesList(history, history.currentId).map((message) => {
@@ -2842,15 +2852,25 @@
 			chatIdProp = $page.params.id ?? '';
 		} else if ($page.params.folderId || $page.url.pathname === '/') {
 			selectedFolder.set($page.data.folder ?? null);
+			// On a first load the input is on screen before set-up, which resets it;
+			// what was typed there goes back in.
+			const typed = preserveTabs ? '' : prompt;
 			await initNewChat({ preserveTabs, url: $page.url });
+			if (typed) messageInput?.setText(typed);
 		} else if (initialPage) {
 			if (!preserveTabs) await initNewChat();
 			loading = false;
 			tabs?.openPageTab({ href: initialPage, label: '' });
 		}
 	};
+	// Set-up checks its choices against the model list, so a page is followed once the list is in.
+	let routeChanged = false;
+	$: if (routeChanged && $models !== null) {
+		routeChanged = false;
+		void followRoute();
+	}
 	afterNavigate(() => {
-		if (!embedded) void followRoute();
+		routeChanged = !embedded;
 		stopAudio();
 	});
 	beforeNavigate(() => {
@@ -3021,7 +3041,7 @@
 		clearTimeout(saveControlsTimer);
 		await saveControls();
 		if (signal.aborted) return;
-		if ($chatId) terminalContext = null;
+		if ($chatId) machineContext = null;
 		cancelBrowserInteractions();
 		bridge?.end();
 		console.log('initNewChat');
@@ -3040,7 +3060,7 @@
 					(temporary ?? (param ? param === 'true' : !!$settings?.temporaryChatByDefault)))
 		);
 
-		const availableModels = $models
+		const availableModels = ($models ?? [])
 			.filter((m) => !(m?.info?.meta?.hidden ?? false))
 			.map((m) => m.id);
 
@@ -3067,7 +3087,7 @@
 			const urlModels = (searchParams.get('models') || searchParams.get('model') || '')?.split(',');
 
 			if (urlModels.length === 1) {
-				if (!$models.find((m) => m.id === urlModels[0])) {
+				if (!($models ?? []).find((m) => m.id === urlModels[0])) {
 					// Model not found; open model selector and prefill
 					modelSearch = urlModels[0];
 				} else {
@@ -3081,13 +3101,14 @@
 
 			// Unavailable models filtering
 			selectedModels = selectedModels.filter(
-				(modelId) => modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId)
+				(modelId) =>
+					modelId.startsWith('agent:') || ($models ?? []).map((m) => m.id).includes(modelId)
 			);
 		} else {
 			if (destinationFolder) {
-				// A configured folder terminal overrides the previous selection.
-				applyFolderTerminal(destinationFolder);
-				if (destinationFolder.data?.terminal_id) {
+				// A configured folder machine overrides the previous selection.
+				applyFolderMachine(destinationFolder);
+				if (machineIdOf(destinationFolder.data)) {
 					await refreshAgentModels(destinationFolder, signal);
 					if (signal.aborted) return;
 				}
@@ -3177,7 +3198,7 @@
 		};
 
 		// Apply folder defaults after restoring the draft and model defaults.
-		applyFolderTerminal(destinationFolder);
+		applyFolderMachine(destinationFolder);
 
 		chatFiles = [];
 		params = {};
@@ -3238,8 +3259,8 @@
 		loading = false;
 		await tick();
 		if (signal.aborted) return;
-		// Mounting the editor clears prompt, so apply the saved text afterward.
-		if (chatInputPrompt !== null) messageInput?.setText(chatInputPrompt);
+		// The new-chat input stays mounted through set-up, so set its text either way.
+		messageInput?.setText(chatInputPrompt ?? '');
 		if (modelSearch) await openModelSelectorWithSearch(modelSearch);
 
 		// Consume call requests or the acknowledged Tether handoff.
@@ -3283,7 +3304,9 @@
 		}
 
 		selectedModels = selectedModels.map((modelId) =>
-			modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelId.startsWith('agent:') || ($models ?? []).map((m) => m.id).includes(modelId)
+				? modelId
+				: ''
 		);
 
 		await tick();
@@ -3293,7 +3316,7 @@
 	const loadChat = async (signal = startChatLoad()) => {
 		if (chatIdProp && chatIdProp !== $chatId) tabs?.resetForChatSwitch();
 		if (chatIdProp && chatIdProp !== $chatId) {
-			terminalContext = null;
+			machineContext = null;
 			history = { messages: {}, currentId: null };
 		}
 		const initialHistory = { ...history, messages: { ...history.messages } };
@@ -3353,21 +3376,21 @@
 					(chatContent?.models ?? undefined) !== undefined
 						? chatContent.models
 						: [chatContent.models ?? ''];
-				if ($terminalServers === null) {
-					const servers = await getTerminalServers(localStorage.token);
+				if ($machines === null) {
+					const servers = await getMachines(localStorage.token);
 					if (signal.aborted) return;
-					terminalServers.set(servers);
+					machines.set(servers);
 				}
-				const terminalId = chatContent.terminal_id;
-				selectedTerminalId.set(terminalId && isTerminalAvailable(terminalId) ? terminalId : null);
-				terminalContext =
-					$selectedTerminalId &&
-					$selectedTerminalId === terminalId &&
+				const machineId = machineIdOf(chatContent);
+				selectedMachineId.set(machineId && isMachineAvailable(machineId) ? machineId : null);
+				machineContext =
+					$selectedMachineId &&
+					$selectedMachineId === machineId &&
 					typeof chatContent.working_directory === 'string'
-						? { terminalId: $selectedTerminalId, currentDirectory: chatContent.working_directory }
+						? { machineId: $selectedMachineId, currentDirectory: chatContent.working_directory }
 						: null;
 				if (selectedModels[0]?.startsWith('agent:')) {
-					if ($selectedTerminalId) {
+					if ($selectedMachineId) {
 						const environment = getAgentEnvironment();
 						if (
 							!environment ||
@@ -3382,9 +3405,10 @@
 				if (signal.aborted) return;
 
 				// An empty model list is not evidence that the chat's models are gone.
-				if ($models.length > 0) {
+				if (($models ?? []).length > 0) {
 					selectedModels = selectedModels.filter(
-						(modelId) => modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId)
+						(modelId) =>
+							modelId.startsWith('agent:') || ($models ?? []).map((m) => m.id).includes(modelId)
 					);
 				}
 
@@ -3659,7 +3683,7 @@
 	};
 
 	// The backend queues messages sent to your own saved chat while a reply runs; the reply ends at its next
-	// step and they are answered next. Files on a terminal stay in this browser's queue.
+	// step and they are answered next. Files on a machine stay in this browser's queue.
 	const usesBackendQueue = (messageFiles: any[] = []) =>
 		($settings?.enableMessageQueue ?? true) &&
 		!$temporaryChat &&
@@ -3880,7 +3904,7 @@
 
 			const responseMessages = [];
 			for (const [modelIdx, modelId] of selectedModels.entries()) {
-				const model = $models.filter((m) => m.id === modelId).at(0);
+				const model = ($models ?? []).filter((m) => m.id === modelId).at(0);
 
 				if (model) {
 					const responseMessageId = uuidv4();
@@ -3938,16 +3962,18 @@
 				scrollToBottom();
 			}
 
-			if (!$chatId) {
-				await initChatHandler(history);
+			const _chatId = $chatId || (await getChatId(history));
+			if (_chatId === null) return;
+			if (_chatId) {
+				await saveChatHandler(_chatId, history);
 			} else {
-				await saveChatHandler($chatId, history);
+				await initChatHandler(history);
 			}
 		}
 	};
 
 	const addMessages = async ({ modelId, parentId, messages }) => {
-		const model = $models.filter((m) => m.id === modelId).at(0);
+		const model = ($models ?? []).filter((m) => m.id === modelId).at(0);
 
 		let parentMessage = history.messages[parentId];
 		let currentParentId = parentMessage ? parentMessage.id : null;
@@ -4031,7 +4057,18 @@
 	};
 
 	const chatCompletionEventHandler = async (data, message, chatId, shared = false) => {
-		const { id, done, choices, content, output, sources, selected_model_id, error, usage } = data;
+		const {
+			id,
+			done,
+			choices,
+			content,
+			output,
+			sources,
+			selected_model_id,
+			strategy,
+			error,
+			usage
+		} = data;
 
 		if (error) {
 			if (shared) message.error = error;
@@ -4090,7 +4127,7 @@
 
 		if (selected_model_id) {
 			message.selectedModelId = selected_model_id;
-			message.arena = true;
+			message.strategy = strategy ?? null;
 		}
 
 		if (usage) {
@@ -4333,7 +4370,7 @@
 			return;
 		}
 
-		const model = $models.find((model) => model.id === modelId);
+		const model = ($models ?? []).find((model) => model.id === modelId);
 		if (!model) {
 			toast.error(`Model not found: ${modelId}`);
 			messageInput?.setText('');
@@ -4439,6 +4476,8 @@
 	$: chatMenu = showChatMenu && !editingTitle ? renderChatMenu : undefined;
 	$: if (embedded && tabbed) tabActions = chatMenu;
 
+	export const getOverview = () => ({ history, chatUser: chatOwner, showMessage });
+
 	export const startRename = async () => {
 		if (
 			loading ||
@@ -4526,34 +4565,32 @@
 
 	let tabBarActions: import('svelte').Snippet | undefined;
 
-	let initializedTerminalChatId: string | null = null;
-	const initializeTerminalDirectory = async (id: string, context: TerminalContext | null) => {
-		if (initializedTerminalChatId === id) return;
+	let initializedMachineChatId: string | null = null;
+	const initializeMachineDirectory = async (id: string, context: MachineContext | null) => {
+		if (initializedMachineChatId === id) return;
 		if (!$config?.features?.enable_tool_servers || !context?.currentDirectory) return;
 		const userSettings: any = $settings;
-		const target = resolveTerminalTarget(
-			context.terminalId,
-			$terminalServers ?? [],
-			localStorage.token,
-			{ chatId: id, modelId: selectedModels[0] ?? null }
-		);
+		const target = resolveMachineTarget(context.machineId, $machines ?? [], localStorage.token, {
+			chatId: id,
+			modelId: selectedModels[0] ?? null
+		});
 		if (!target) throw new Error($i18n.t('Machine Not Found'));
 		const result = await setCwd(target, context.currentDirectory);
 		if (!result?.cwd)
 			throw new Error($i18n.t('Working directory is unavailable. Check the machine and path.'));
-		initializedTerminalChatId = id;
+		initializedMachineChatId = id;
 	};
 
 	const getChatId = async (_history: typeof history, inputFiles = files) => {
 		let _chatId = $chatId;
-		const terminalId =
-			inputFiles.find((file) => file.type === 'filesystem')?.terminal_id ?? $selectedTerminalId;
+		const machineId =
+			machineIdOf(inputFiles.find((file) => file.type === 'filesystem')) ?? $selectedMachineId;
 		const context =
 			$config?.features?.enable_tool_servers &&
 			!Object.values(_history.messages).some((message) => message.role === 'assistant') &&
-			terminalContext &&
-			terminalContext.terminalId === terminalId
-				? terminalContext
+			machineContext &&
+			machineContext.machineId === machineId
+				? machineContext
 				: null;
 		// Empty embedded drafts create their backing chat only when the first message is sent.
 		if (!_chatId) {
@@ -4592,7 +4629,7 @@
 		if (_chatId) await tabs?.attachChatViewTo(_chatId);
 		if (history !== _history || $chatId !== _chatId) return null;
 		// Also covers temporary/embedded chats and retries after a failed initialization.
-		if (_chatId) await initializeTerminalDirectory(_chatId, context);
+		if (_chatId) await initializeMachineDirectory(_chatId, context);
 		if (history !== _history || $chatId !== _chatId) return null;
 		return _chatId;
 	};
@@ -4613,12 +4650,15 @@
 			}
 		}
 		if (processing === 'uploading') return { status: 'deferred' };
+		if ($models === null) return { status: 'deferred' };
 		emitTyping(false);
 		if (bridgeRequest && (selectedModelIds.length !== 1 || !bridgeRequest.modelId))
 			return { status: 'rejected' };
 
 		const _selectedModels = selectedModels.map((modelId) =>
-			modelId.startsWith('agent:') || $models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelId.startsWith('agent:') || ($models ?? []).map((m) => m.id).includes(modelId)
+				? modelId
+				: ''
 		);
 
 		if (!equal(selectedModels, _selectedModels)) {
@@ -4682,7 +4722,7 @@
 			toast.error($i18n.t('Model not selected'));
 			return { status: 'rejected' };
 		}
-		const form = getChatVariablesForm(selectedModelIds, chatVariables, $models);
+		const form = getChatVariablesForm(selectedModelIds, chatVariables, $models ?? []);
 		if (form.conflicts.length > 0) {
 			showChatVariablesModal = true;
 			toast.error($i18n.t('Chat Variables have conflicting model definitions'));
@@ -4820,17 +4860,17 @@
 		const parent = _history.messages[parentId];
 		if (parent?.files?.some((file: any) => file.type === 'filesystem')) {
 			const attached = parent.files.filter((file: any) => file.type === 'filesystem');
-			const terminal = attached.find((file: any) => file.terminal_id)?.terminal_id;
+			const machine = machineIdOf(attached.find((file: any) => machineIdOf(file)));
 			if (
 				attached.some(
 					(file: any) =>
-						(file.terminal_id && file.terminal_id !== terminal) ||
+						(machineIdOf(file) && machineIdOf(file) !== machine) ||
 						(file.session_id && file.session_id !== $chatId)
 				)
 			)
-				throw new Error('Attached files must belong to this chat and the same terminal.');
-			if (terminal && !isTerminalAvailable(terminal))
-				throw new Error('The attached file’s terminal is unavailable.');
+				throw new Error('Attached files must belong to this chat and the same machine.');
+			if (machine && !isMachineAvailable(machine))
+				throw new Error('The attached file’s machine is unavailable.');
 		}
 		if (autoScroll) {
 			scrollToBottom();
@@ -4856,7 +4896,7 @@
 		// Use a message_ids array with modelIdx to preserve separate columns for duplicate models.
 		const messageIdsList: Array<{ model_id: string; message_id: string; modelIdx: number }> = [];
 		for (const [_modelIdx, modelId] of selectedModelIds.entries()) {
-			const model = $models.filter((m) => m.id === modelId).at(0);
+			const model = ($models ?? []).filter((m) => m.id === modelId).at(0);
 
 			if (model) {
 				let responseMessageId = uuidv4();
@@ -4903,7 +4943,7 @@
 
 		// Vision capability check
 		for (const mid of selectedModelIds) {
-			const model = $models.filter((m) => m.id === mid).at(0);
+			const model = ($models ?? []).filter((m) => m.id === mid).at(0);
 			if (model) {
 				const hasImages = createMessagesList(_history, parentId).some((message) =>
 					message.files?.some(
@@ -4928,7 +4968,7 @@
 
 		// Single request — backend fans out to all models
 		const primaryModelId = selectedModelIds[0];
-		const primaryModel = $models.filter((m) => m.id === primaryModelId).at(0);
+		const primaryModel = ($models ?? []).filter((m) => m.id === primaryModelId).at(0);
 		const primaryResponseMessageId = messageIdsList[0]?.message_id;
 		let submittedTaskIds: string[] = [];
 
@@ -5043,10 +5083,10 @@
 		const filesystemAttachment = userMessage?.files?.find(
 			(file: any) => file.type === 'filesystem'
 		);
-		const requestTerminalId = filesystemAttachment?.terminal_id ?? $selectedTerminalId;
-		const requestTerminalCwd =
-			terminalContext && terminalContext.terminalId === requestTerminalId
-				? terminalContext.currentDirectory
+		const requestMachineId = machineIdOf(filesystemAttachment) ?? $selectedMachineId;
+		const requestMachineCwd =
+			machineContext && machineContext.machineId === requestMachineId
+				? machineContext.currentDirectory
 				: undefined;
 
 		const chatMessageFiles = _messages
@@ -5168,8 +5208,8 @@
 		// Keep mentions in the message so the backend can resolve them.
 		const skillIds = [...selectedSkillIds];
 
-		// Only send terminal_id if the model has terminal capability enabled
-		const terminalEnabled =
+		// Only send machine_id if the model has the machine capability enabled
+		const machineEnabled =
 			$config?.features?.enable_tool_servers && (model.info?.meta?.capabilities?.terminal ?? true);
 		const useChatVariablesFallback = !_chatId || $temporaryChat || isTemporaryChatId(_chatId);
 
@@ -5202,8 +5242,8 @@
 						: $config?.features?.enable_tools
 				),
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				terminal_id: terminalEnabled && requestTerminalId ? requestTerminalId : null,
-				terminal_cwd: !_chatId ? requestTerminalCwd : undefined,
+				machine_id: machineEnabled && requestMachineId ? requestMachineId : null,
+				machine_cwd: !_chatId ? requestMachineCwd : undefined,
 				features: getFeatures(),
 				variables: {
 					...getPromptVariables(
@@ -5523,7 +5563,7 @@
 			responseMessage.done = false;
 			await tick();
 
-			const model = $models
+			const model = ($models ?? [])
 				.filter((m) => m.id === (responseMessage?.selectedModelId ?? responseMessage.model))
 				.at(0);
 
@@ -5598,7 +5638,7 @@
 	const initChatHandler = async (_history: typeof history) => {
 		let _chatId = $chatId;
 		const selectedFolderId = $selectedFolder?.id ?? draftFolderId;
-		const context = terminalContext;
+		const context = machineContext;
 
 		if (!$temporaryChat) {
 			const createdChat = await createNewChat(
@@ -5608,9 +5648,9 @@
 					title: draftTitle || $i18n.t('New Chat'),
 					...(parentChatId && { originalChatId: parentChatId, branchPointMessageId }),
 					models: selectedModels,
-					terminal_id: $selectedTerminalId,
+					machine_id: $selectedMachineId,
 					working_directory:
-						context?.terminalId === $selectedTerminalId ? context.currentDirectory : '',
+						context?.machineId === $selectedMachineId ? context.currentDirectory : '',
 					system: $settings.system ?? undefined,
 					params: params,
 					history: _history,
@@ -5626,7 +5666,7 @@
 			if (!createdChat?.id) throw new Error($i18n.t('Failed to create chat'));
 			if (!Object.values(_history.messages).some((message) => message.role === 'assistant')) {
 				// A refused first message leaves no chat behind.
-				await initializeTerminalDirectory(createdChat.id, context).catch(async (error) => {
+				await initializeMachineDirectory(createdChat.id, context).catch(async (error) => {
 					if (await deleteChatById(localStorage.token, createdChat.id).catch(() => null))
 						throw error;
 				});
@@ -5658,7 +5698,7 @@
 			_chatId = isTemporaryChatId(_chatId) ? _chatId : createTemporaryChatId($socket?.id);
 			await chatId.set(_chatId);
 		}
-		await initializeTerminalDirectory(_chatId, context);
+		await initializeMachineDirectory(_chatId, context);
 		await tick();
 
 		return _chatId;
@@ -5724,8 +5764,8 @@
 			chatFiles,
 			chatVariables,
 			temporary: $temporaryChat,
-			terminalId: $selectedTerminalId,
-			terminalContext,
+			machineId: $selectedMachineId,
+			machineContext,
 			controls: getChatInputControls(),
 			prompt: text ?? '',
 			files: inputFiles,
@@ -5970,7 +6010,7 @@
 
 <audio bind:this={audioElement} style="display: none;"></audio>
 
-{#if getChatVariablesForm(selectedModelIds, chatVariables, $models).conflicts.length > 0}
+{#if getChatVariablesForm(selectedModelIds, chatVariables, $models ?? []).conflicts.length > 0}
 	<Modal ariaLabel={$i18n.t('Chat Variables')} bind:show={showChatVariablesModal} size="md">
 		<div>
 			<div class="flex justify-between px-4 pt-3 pb-1 dark:text-base-300">
@@ -5991,7 +6031,7 @@
 					{$i18n.t('Selected models define incompatible Chat Variables.')}
 				</div>
 				<div class="flex flex-col gap-1">
-					{#each getChatVariablesForm(selectedModelIds, chatVariables, $models).conflicts as conflict}
+					{#each getChatVariablesForm(selectedModelIds, chatVariables, $models ?? []).conflicts as conflict}
 						<div class="rounded-lg border border-red-200 px-3 py-2 text-xs dark:border-red-900/60">
 							<div class="font-medium text-red-600 dark:text-red-400">{conflict.key}</div>
 							<div class="mt-1 text-base-500 dark:text-base-400">
@@ -6007,7 +6047,7 @@
 	<InputVariablesModal
 		bind:show={showChatVariablesModal}
 		title={$i18n.t('Chat Variables')}
-		variables={getChatVariablesForm(selectedModelIds, chatVariables, $models).variables}
+		variables={getChatVariablesForm(selectedModelIds, chatVariables, $models ?? []).variables}
 		onSave={saveChatVariables}
 	/>
 {/if}
@@ -6167,7 +6207,8 @@
 				role={fullWidthTabs ? 'tabpanel' : undefined}
 				aria-labelledby={fullWidthTabs ? 'chat-panel-main-chat' : undefined}
 			>
-				{#if loading}
+				<!-- An empty new chat keeps its input on screen while it sets itself up. -->
+				{#if loading && (embedded || $page.url.pathname !== '/' || history.currentId)}
 					{#if !fullWidthTabs && !embeddedCollapsed}
 						<div class="flex items-center justify-center h-full w-full">
 							<Spinner className="size-5" />
@@ -6256,10 +6297,10 @@
 											id: uuidv4(),
 											title: title.length > 50 ? `${title.slice(0, 50)}...` : title,
 											models: selectedModels,
-											terminal_id: $selectedTerminalId,
+											machine_id: $selectedMachineId,
 											working_directory:
-												terminalContext?.terminalId === $selectedTerminalId
-													? terminalContext.currentDirectory
+												machineContext?.machineId === $selectedMachineId
+													? machineContext.currentDirectory
 													: '',
 											params: params,
 											history: history,
@@ -6307,7 +6348,6 @@
 										scrollHeight - scrollTop <= clientHeight + 5 ||
 										(autoScroll && scrollTop >= lastScrollTop);
 									lastScrollTop = scrollTop;
-									isNearTop = scrollTop <= 100;
 								}}
 							>
 								<div class=" h-full w-full flex flex-col">
@@ -6368,12 +6408,12 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
-										{selectedTerminalId}
-										{terminalSkills}
+										{selectedMachineId}
+										{machineSkills}
 										{messagesContainerId}
 										{inputId}
 										{onTemporaryChange}
-										bind:terminalContext
+										bind:machineContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
 										callActive={!!(bridge?.connected || bridge?.connecting)}
@@ -6492,12 +6532,12 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									<MessageInput
-										{selectedTerminalId}
-										{terminalSkills}
+										{selectedMachineId}
+										{machineSkills}
 										{messagesContainerId}
 										{inputId}
 										{onTemporaryChange}
-										bind:terminalContext
+										bind:machineContext
 										{typingUsers}
 										on:typing={(event) => emitTyping(event.detail)}
 										callActive={!!(bridge?.connected || bridge?.connecting)}
@@ -6578,11 +6618,11 @@
 								<Placeholder
 									onNewFolderChat={() => tabs?.openFeatureTab('chat')}
 									bind:folderTabActions
-									{selectedTerminalId}
-									{terminalSkills}
+									{selectedMachineId}
+									{machineSkills}
 									chatId={$chatId}
 									{onTemporaryChange}
-									bind:terminalContext
+									bind:machineContext
 									callActive={!!(bridge?.connected || bridge?.connecting)}
 									callEnabled={!isShared}
 									bind:selectedModelIdx
@@ -6645,7 +6685,8 @@
 				{/if}
 			</div>
 
-			{#if !embedded}
+			<!-- Restored tabs resolve their machines on mount, so they wait for the lists. -->
+			{#if !embedded && $models !== null}
 				<Tabs
 					{mainChatHref}
 					{getEmbeddedDraft}
@@ -6676,7 +6717,7 @@
 							? folderTabActions
 							: tabActions}
 					tabBarActions={loading ? undefined : tabBarActions}
-					{terminalContext}
+					{machineContext}
 					bind:chatHistory={history}
 					bind:files
 					chatId={$chatId}
