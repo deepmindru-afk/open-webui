@@ -94,6 +94,7 @@
 		requestId: number;
 	} | null = null;
 
+	export let wrapLines = false;
 	export let saving = false;
 
 	export const discard = () => {
@@ -344,7 +345,9 @@
 	{:else if fileSqliteData !== null}
 		<SqliteView data={fileSqliteData} />
 	{:else if fileDocxData !== null}
-		<DocxPreview data={fileDocxData} {targetPage} className="w-full h-full" />
+		<DocxPreview data={fileDocxData} {targetPage} className="w-full h-full">
+			<slot name="toolbar" slot="toolbar" />
+		</DocxPreview>
 	{:else if excelWorkbook !== null}
 		<ExcelPreview workbook={excelWorkbook} bind:selectedSheet={selectedExcelSheet} />
 	{:else if fileOfficeSlides !== null && fileOfficeSlides.length > 0}
@@ -361,6 +364,7 @@
 				<FileCodeEditor
 					{gitBaseContent}
 					readOnly={readOnly || !onSave}
+					{wrapLines}
 					bind:this={fileCodeEditorRef}
 					bind:value={codeValue}
 					filePath={selectedFile}
@@ -477,6 +481,7 @@
 				<FileCodeEditor
 					{gitBaseContent}
 					readOnly={readOnly || !onSave}
+					{wrapLines}
 					bind:this={fileCodeEditorRef}
 					bind:value={codeValue}
 					filePath={selectedFile}

@@ -78,12 +78,14 @@
 		getNoteById,
 		getNoteChatsById,
 		updateNoteById,
+		updateNoteFolderIdById,
 		updateNotePages,
 		updateNoteAccessGrants,
 		toggleNotePinnedStatusById,
 		getPinnedNoteList
 	} from '$lib/apis/notes';
 	import { deleteChatById } from '$lib/apis/chats';
+	import { refreshFolderChatLists } from '$lib/stores/chatList';
 
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import { fileUploadsKey } from '../common/RichTextInput/FileAttachment';
@@ -375,6 +377,8 @@
 	};
 	let noteChatId = null;
 	let noteChatExpanded = false;
+	let noteChatExpandButtonElement: HTMLButtonElement;
+	let noteChatMessageInput = null;
 	// The chat composer records audio; in a note chat it lands in the note instead of the message.
 	$: noteAudioHandler = note?.write_access ? (file: File) => inputFileHandler(file) : null;
 	// Opening a note lands in its body; the docked chat composer no longer takes focus.
@@ -465,6 +469,19 @@
 		}
 
 		loading = false;
+	};
+
+	const moveHandler = async (folderId: string | null) => {
+		const previous = note.folder_id;
+		const res = await updateNoteFolderIdById(localStorage.token, id, folderId).catch((e) => {
+			toast.error(`${e}`);
+			return null;
+		});
+		if (!res) return;
+
+		note.folder_id = folderId;
+		toast.success($i18n.t('Note moved successfully'));
+		for (const moved of [previous, folderId]) if (moved) void refreshFolderChatLists(moved);
 	};
 
 	let debounceTimeout: NodeJS.Timeout | null = null;
@@ -1285,6 +1302,8 @@ ${content}
 									bind:autoFormat
 									showAutoFormat={note?.write_access ?? false}
 									onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
+									folderId={note?.folder_id}
+									onMove={note?.user_id === $user?.id ? moveHandler : null}
 									onDownload={(type) => {
 										downloadHandler(type);
 									}}
@@ -1613,7 +1632,13 @@ ${content}
 									? ''
 									: 'bg-linear-to-t from-base-0 from-40% to-transparent pt-8 dark:from-base-900'}"
 							>
-								<div class="flex justify-center">
+								{#if noteChatExpanded}
+									<!-- The fade stays at the composer's height, so text beside the open chat stays readable. -->
+									<div
+										class="absolute inset-x-0 bottom-0 h-36 bg-linear-to-t from-base-0 from-40% to-transparent dark:from-base-900"
+									></div>
+								{/if}
+								<div class="relative flex justify-center">
 									<!-- Side padding lives on the column so the composer keeps its box in both states. -->
 									<div
 										class="pointer-events-auto flex w-full max-w-3xl flex-col rounded-t-3xl border border-b-0 {noteChatExpanded
@@ -1626,7 +1651,13 @@ ${content}
 												class="mb-0.5 ml-3 flex max-w-full items-center gap-1 self-start rounded-lg px-1.5 py-0.5 text-xs text-base-500 transition hover:text-base-800 dark:text-base-400 dark:hover:text-base-100"
 												aria-label={$i18n.t('Expand')}
 												aria-expanded="false"
-												on:click={() => (noteChatExpanded = true)}
+												bind:this={noteChatExpandButtonElement}
+												on:click={async () => {
+													noteChatExpanded = true;
+													await tick();
+													if (!$mobile && document.activeElement === document.body)
+														noteChatMessageInput?.focus({ preventScroll: true });
+												}}
 											>
 												<ChevronUp className="size-3 shrink-0" strokeWidth="2" />
 												<span class="truncate"
@@ -1650,7 +1681,13 @@ ${content}
 														embeddedCollapsed={!noteChatExpanded}
 														embeddedInset
 														onRecordedAudio={noteAudioHandler}
-														onCollapseEmbedded={() => (noteChatExpanded = false)}
+														bind:messageInput={noteChatMessageInput}
+														onCollapseEmbedded={async () => {
+															noteChatExpanded = false;
+															await tick();
+															if (document.activeElement === document.body)
+																noteChatExpandButtonElement?.focus();
+														}}
 														onBeforeNoteSubmit={async () => {
 															noteChatExpanded = true;
 															await flushActivePage();

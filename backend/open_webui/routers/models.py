@@ -47,11 +47,11 @@ from open_webui.models.models import (
 from open_webui.storage.provider import Storage
 from open_webui.utils.access_control import (
     filter_allowed_access_grants,
-    has_access,
     has_permission,
     validate_access_grants,
 )
 from open_webui.utils.access_control.files import has_access_to_file
+from open_webui.utils.access_control.notes import has_note_access
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.chat_variables import get_chat_variables_schema
 from open_webui.utils.models import get_all_models
@@ -885,8 +885,12 @@ async def _verify_version_dependencies(request, form, user, db):
         if not resource or getattr(resource, 'is_active', True) is False:
             raise HTTPException(400, f'Referenced {resource_type} is unavailable: {resource_id}')
         if not (user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL) and resource.user_id != user.id:
-            if not await AccessGrants.has_access(
-                user_id=user.id, resource_type=resource_type, resource_id=resource_id, permission='read', db=db
+            if not (
+                await has_note_access(user.id, resource, 'read', db)
+                if resource_type == 'note'
+                else await AccessGrants.has_access(
+                    user_id=user.id, resource_type=resource_type, resource_id=resource_id, permission='read', db=db
+                )
             ):
                 raise HTTPException(403, f'Referenced {resource_type} is not accessible: {resource_id}')
 
@@ -974,6 +978,8 @@ async def get_model_profile_image(
 
     # First, check the database for regular models
     model_meta = await Models.get_model_meta_by_id(id, db=db)
+    # As in the model list, a model without a row is visible to admins only.
+    read_access = bypass_access_control or (not model_meta and user.role == 'admin')
     if model_meta:
         meta, model_user_id, model_updated_at = model_meta
         # Denied callers get the default image rather than an error, so model ids stay unprobeable.
@@ -988,6 +994,7 @@ async def get_model_profile_image(
                 db=db,
             )
         ):
+            read_access = True
             profile_image_url = (meta or {}).get('profile_image_url')
             updated_at = model_updated_at
 
@@ -997,12 +1004,7 @@ async def get_model_profile_image(
         for router_model in router_models:
             if router_model.get('id') == id:
                 router_meta = router_model.get('meta', {})
-                access_grants = router_meta.get('access_grants', [])
-                if (
-                    bypass_access_control
-                    or (not access_grants and user.role == 'admin')
-                    or await has_access(user.id, permission='read', access_grants=access_grants, db=db)
-                ):
+                if read_access:
                     profile_image_url = router_meta.get('profile_image_url')
                 break
 

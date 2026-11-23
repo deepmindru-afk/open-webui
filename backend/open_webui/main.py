@@ -499,18 +499,22 @@ async def lifespan(app: FastAPI):
             }
         )
 
-        log.info('Initializing tool servers...')
-        try:
-            await set_tool_servers(mock_request)
-            log.info('Initialized %s tool server(s)', len(app.state.TOOL_SERVERS))
-        except Exception as e:
-            log.warning(f'Failed to initialize tool servers at startup: {e}')
+        async def prefetch_tool_servers():
+            log.info('Initializing tool servers...')
+            try:
+                await set_tool_servers(mock_request)
+                log.info('Initialized %s tool server(s)', len(app.state.TOOL_SERVERS))
+            except Exception as e:
+                log.warning(f'Failed to initialize tool servers at startup: {e}')
 
-        try:
-            await set_machines(mock_request)
-            log.info('Initialized %s terminal server(s)', len(app.state.MACHINES))
-        except Exception as e:
-            log.warning(f'Failed to initialize terminal servers at startup: {e}')
+            try:
+                await set_machines(mock_request)
+                log.info('Initialized %s terminal server(s)', len(app.state.MACHINES))
+            except Exception as e:
+                log.warning(f'Failed to initialize terminal servers at startup: {e}')
+
+        # Don't hold startup on unreachable servers
+        app.state.prefetch_tool_servers = asyncio.create_task(prefetch_tool_servers())
 
     # Mark application as ready to accept traffic from a startup perspective.
     if license_task:
@@ -539,6 +543,9 @@ async def lifespan(app: FastAPI):
 
     if hasattr(app.state, 'redis_task_heartbeat'):
         app.state.redis_task_heartbeat.cancel()
+
+    if hasattr(app.state, 'prefetch_tool_servers'):
+        app.state.prefetch_tool_servers.cancel()
 
     app.state.periodic_socket_authentication.cancel()
     app.state.periodic_usage_pool_cleanup.cancel()
@@ -1363,7 +1370,7 @@ async def chat_completion(
                 raise HTTPException(status_code=404, detail='Temporary chat expired or unavailable')
 
         initial_title_generation = None
-        if is_new_chat and tasks and TASKS.TITLE_GENERATION in tasks:
+        if is_new_chat and tasks and TASKS.TITLE_GENERATION in tasks and model.get('owned_by') != 'router':
             initial_title_generation = tasks.pop(TASKS.TITLE_GENERATION)
         elif is_new_chat and agent_model:
             initial_title_generation = False  # Still give agent chats a first-message title.
@@ -1692,6 +1699,7 @@ async def chat_completion(
                     response_meta['task_id'] = task_id
                 message['meta'] = response_meta
                 message['done'] = False
+                message['error'] = None
                 if agent_model:
                     message['modelName'] = agent_model['name']
 
@@ -1737,6 +1745,20 @@ async def chat_completion(
                 )
                 if paused:
                     return {'status': True, 'chat_id': metadata.get('chat_id'), 'paused': True}
+                # Titled after routing, on the model the router picked.
+                if is_new_chat and tasks and TASKS.TITLE_GENERATION in tasks and model.get('owned_by') == 'router':
+                    title_tasks = {TASKS.TITLE_GENERATION: tasks.pop(TASKS.TITLE_GENERATION)}
+                    title_ctx = await build_chat_response_context(
+                        request, form_data, user, model, metadata, title_tasks, []
+                    )
+
+                    async def run_router_title_generation():
+                        try:
+                            await background_tasks_handler(title_ctx)
+                        except Exception:
+                            log.exception('Error generating router chat title')
+
+                    asyncio.create_task(run_router_title_generation())
 
                 response = await chat_completion_handler(request, form_data, user)
 

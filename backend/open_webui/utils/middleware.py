@@ -269,7 +269,8 @@ async def publish_chat_finished_event(
             'chat_id': chat_id,
             'message_id': metadata.get('message_id'),
             'model_id': metadata.get('model_id'),
-            'model_name': model.get('name'),
+            # Machine agents and Tether models are not in the shared model list.
+            'model_name': model.get('name') or (metadata.get('model') or {}).get('name'),
             'title': title,
             'url': f'{webui_url}/c/{chat_id}' if webui_url else f'/c/{chat_id}',
             'message': content,
@@ -601,6 +602,29 @@ def get_response_completion_event_data(event: dict) -> dict:
     }
 
 
+def get_citation_ids(source: dict, source_ids: dict) -> list[int]:
+    """
+    Number a source's documents for citation and save the numbers with it.
+
+    source_ids holds the numbers the chat has used so far, so a document keeps its
+    number across turns and a new one takes the next. A number saved earlier wins:
+    it is the one the model was shown.
+    """
+    saved_ids = source.get('citation_ids')
+    saved_ids = saved_ids if isinstance(saved_ids, list) else []
+    citation_ids = []
+    for index, (_, meta) in enumerate(zip(source.get('document', []), source.get('metadata', []))):
+        source_id = meta.get('source') or source.get('source', {}).get('id') or 'N/A'
+        saved_id = saved_ids[index] if index < len(saved_ids) else None
+        if type(saved_id) is int and saved_id > 0:
+            source_ids[source_id] = saved_id
+        elif source_id not in source_ids:
+            source_ids[source_id] = max(source_ids.values(), default=0) + 1
+        citation_ids.append(source_ids[source_id])
+    source['citation_ids'] = citation_ids
+    return citation_ids
+
+
 def get_source_context(sources: list, source_ids: dict = None, include_content: bool = True) -> str:
     """
     Build <source> tag context string from citation sources.
@@ -609,10 +633,8 @@ def get_source_context(sources: list, source_ids: dict = None, include_content: 
     if source_ids is None:
         source_ids = {}
     for source in sources:
-        for doc, meta in zip(source.get('document', []), source.get('metadata', [])):
-            source_id = meta.get('source') or source.get('source', {}).get('id') or 'N/A'
-            if source_id not in source_ids:
-                source_ids[source_id] = len(source_ids) + 1
+        citation_ids = get_citation_ids(source, source_ids)
+        for doc, meta, citation_id in zip(source.get('document', []), source.get('metadata', []), citation_ids):
             src_name = source.get('source', {}).get('name')
             src_type = source.get('source', {}).get('type')
             src_rid = source.get('source', {}).get('id') if src_type != 'text' else None
@@ -623,7 +645,7 @@ def get_source_context(sources: list, source_ids: dict = None, include_content: 
                     continue
                 extra_attrs += f' {key}="{html.escape(str(value))}"'
             context_string += (
-                f'<source id="{source_ids[source_id]}"'
+                f'<source id="{citation_id}"'
                 + (f' name="{src_name}"' if src_name else '')
                 + (f' resource-type="{src_type}"' if src_type else '')
                 + (f' resource-id="{src_rid}"' if src_rid else '')
@@ -637,6 +659,7 @@ async def apply_source_context_to_messages(
     request: Request,
     messages: list,
     sources: list,
+    source_ids: dict,
     user_message: str,
     include_content: bool = True,
 ) -> list:
@@ -651,7 +674,7 @@ async def apply_source_context_to_messages(
     if not sources or not user_message:
         return messages
 
-    context = get_source_context(sources, include_content=include_content)
+    context = get_source_context(sources, source_ids, include_content=include_content)
 
     context = context.strip()
     if not context:
@@ -681,11 +704,12 @@ async def tool_result_with_citations(name, params, result, tool, model, source_i
     except Exception as e:
         log.exception(f'Error extracting citation source: {e}')
         return content
-    if event_emitter:
-        for source in sources:
-            await event_emitter({'type': 'source', 'data': source})
     if sources:
+        # Number the sources before they are emitted, so the saved message keeps the numbers.
         context = get_source_context(sources, source_ids, include_content=False).strip()
+        if event_emitter:
+            for source in sources:
+                await event_emitter({'type': 'source', 'data': source})
         if context:
             citation_context = await rag_template(await Config.get('rag.template'), context, user_message or '')
             # Save markers with this result so later requests replay the same prefix.
@@ -1884,10 +1908,15 @@ async def convert_url_images_to_base64(form_data, user=None):
 MESSAGE_REPLAY_KEYS = ('id', 'role', 'content', 'output', 'files', 'contextSummary', 'usage', 'model', 'meta')
 
 
-async def load_messages_from_db(chat_id: str, message_id: str) -> Optional[list[dict]]:
+async def load_messages_from_db(
+    chat_id: str, message_id: str, citation_source_ids: Optional[dict] = None
+) -> Optional[list[dict]]:
     """
     Load the message chain from DB up to message_id,
     keeping only fields needed to rebuild the LLM payload.
+
+    When citation_source_ids is given, it is filled with the citation numbers
+    the chain's sources already use.
     """
     messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
     if not messages_map:
@@ -1896,6 +1925,12 @@ async def load_messages_from_db(chat_id: str, message_id: str) -> Optional[list[
     db_messages = get_message_list(messages_map, message_id)
     if not db_messages:
         return None
+
+    if citation_source_ids is not None:
+        for msg in db_messages:
+            for source in msg.get('sources') or []:
+                if isinstance(source, dict):
+                    get_citation_ids(source, citation_source_ids)
 
     for msg in db_messages:
         skills_create = (msg.get('meta') or {}).get('skills_create')
@@ -2100,7 +2135,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     )
 
     if is_saved_chat_id(chat_id) and user_message_id:
-        db_messages = await load_messages_from_db(chat_id, user_message_id)
+        # Earlier turns replay their <source> ids, so this turn's sources continue that numbering.
+        metadata['citation_source_ids'] = {}
+        db_messages = await load_messages_from_db(chat_id, user_message_id, metadata['citation_source_ids'])
         if db_messages:
             # Continue: frontend sends assistant_message_id when continuing
             # an existing response. Load its content so the LLM sees prior output.
@@ -2724,7 +2761,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
                             tool_function = await make_tool_function(client, tool_spec['name'])
 
-                            tool_name = f'{server_id}_{tool_spec["name"]}'
+                            tool_name = re.sub(r'[^a-zA-Z0-9_-]', '_', f'{server_id}_{tool_spec["name"]}')
                             # Providers reject tool names over 64 characters
                             if len(tool_name) > 64:
                                 tool_name = f'{tool_name[:55]}_{hashlib.sha256(tool_name.encode()).hexdigest()[:8]}'
@@ -2921,7 +2958,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     # If context is not empty, insert it into the messages
     if sources and prompt:
-        form_data['messages'] = await apply_source_context_to_messages(request, form_data['messages'], sources, prompt)
+        form_data['messages'] = await apply_source_context_to_messages(
+            request,
+            form_data['messages'],
+            sources,
+            metadata.setdefault('citation_source_ids', {}),
+            prompt,
+        )
 
     # If there are citations, add them to the data_items
     sources = [
@@ -3241,7 +3284,7 @@ async def resume_tool_calls(request, form_data, user, model, metadata, message) 
         return False
 
     event_emitter, event_caller = await get_event_emitter_and_caller(metadata)
-    citation_source_ids = {}
+    citation_source_ids = metadata.setdefault('citation_source_ids', {})
     get_source_context(
         message.get('sources') or metadata.get('sources', []), citation_source_ids, include_content=False
     )
@@ -3685,6 +3728,7 @@ async def background_tasks_handler(ctx):
             message = {**message, 'model': form_data.get('model')}
 
     if message and 'model' in message:
+        model_id = form_data['model'] if ctx.get('model', {}).get('owned_by') == 'router' else message['model']
         if tasks and messages:
             if TASKS.FOLLOW_UP_GENERATION in tasks and tasks[TASKS.FOLLOW_UP_GENERATION]:
                 follow_up_messages = list(messages)
@@ -3701,7 +3745,7 @@ async def background_tasks_handler(ctx):
                 res = await generate_follow_ups(
                     request,
                     {
-                        'model': message['model'],
+                        'model': model_id,
                         'messages': follow_up_messages,
                         'message_id': metadata['message_id'],
                         'chat_id': metadata['chat_id'],
@@ -3767,7 +3811,7 @@ async def background_tasks_handler(ctx):
                         res = await generate_title(
                             request,
                             {
-                                'model': message['model'],
+                                'model': model_id,
                                 'messages': messages,
                                 'chat_id': metadata['chat_id'],
                             },
@@ -3830,7 +3874,7 @@ async def background_tasks_handler(ctx):
                     res = await generate_chat_tags(
                         request,
                         {
-                            'model': message['model'],
+                            'model': model_id,
                             'messages': messages,
                             'chat_id': metadata['chat_id'],
                         },
@@ -3851,7 +3895,7 @@ async def background_tasks_handler(ctx):
 
                         try:
                             tags = JSONCodec.loads(tags_string).get('tags', [])
-                            await Chats.update_chat_tags_by_id(metadata['chat_id'], tags, user)
+                            await Chats.update_chat_tags_by_id(metadata['chat_id'], tags)
 
                             await event_emitter(
                                 {
@@ -5798,7 +5842,7 @@ async def streaming_chat_response_handler(response, ctx):
                 )
                 final_answer_requested = form_data.get('tool_choice') == 'none'
                 stop_reason = None
-                citation_source_ids = {}
+                citation_source_ids = metadata.setdefault('citation_source_ids', {})
                 get_source_context(
                     (message or {}).get('sources') or metadata.get('sources', []),
                     citation_source_ids,

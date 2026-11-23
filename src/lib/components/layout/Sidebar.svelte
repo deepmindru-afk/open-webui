@@ -386,26 +386,6 @@
 		return items[id];
 	};
 
-	const menuItemPathPrefixes = {
-		notes: '/notes',
-		workspace: '/workspace',
-		calendar: '/calendar',
-		automations: '/automations',
-		playground: '/playground'
-	};
-
-	const getActiveMenuItemId = (pathname) => {
-		for (const [id, pathPrefix] of Object.entries(menuItemPathPrefixes)) {
-			if (pathname === pathPrefix || pathname.startsWith(`${pathPrefix}/`)) {
-				return id;
-			}
-		}
-
-		return null;
-	};
-
-	$: activeMenuItemId = getActiveMenuItemId($page.url.pathname);
-
 	const initPinnedMenuSortable = () => {
 		const el = document.getElementById('pinned-menu-items-list');
 		if (el && !$mobile) {
@@ -548,7 +528,17 @@
 		}
 	};
 
+	// Only fetch channels if the feature is enabled and user has permission
+	$: canUseChannels =
+		$config?.features?.enable_channels &&
+		($user?.role === 'admin' || ($user?.permissions?.features?.channels ?? true));
+	$: if (canUseChannels) initChannels();
+
 	const initChannels = async () => {
+		if (!canUseChannels) {
+			return;
+		}
+
 		const res = await getChannels(localStorage.token).catch((error) => {
 			return null;
 		});
@@ -587,14 +577,6 @@
 	};
 
 	const initSidebarData = async () => {
-		// Only fetch channels if the feature is enabled and user has permission
-		if (
-			$config?.features?.enable_channels &&
-			($user?.role === 'admin' || ($user?.permissions?.features?.channels ?? true))
-		) {
-			initChannels();
-		}
-
 		await initChatList();
 	};
 
@@ -1329,12 +1311,7 @@
 										aria-label={$i18n.t(meta.label)}
 									>
 										<div
-											class="self-center flex size-[calc(30px*var(--app-text-scale,1))] items-center justify-center rounded-lg transition {itemId ===
-											activeMenuItemId
-												? ($settings?.highContrastMode ?? false)
-													? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06]'
-													: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045]'
-												: 'group-hover:bg-base-100 dark:group-hover:bg-base-900'}"
+											class="self-center flex size-[calc(30px*var(--app-text-scale,1))] items-center justify-center rounded-lg transition group-hover:bg-base-100 dark:group-hover:bg-base-900"
 										>
 											{#if itemId === 'notes'}
 												<NotesIcon className="size-4" strokeWidth="1.5" />
@@ -1569,12 +1546,7 @@
 									>
 										<a
 											id="sidebar-{itemId}-button"
-											class="grow flex items-center space-x-2 rounded-xl px-2 py-1.5 transition {itemId ===
-											activeMenuItemId
-												? ($settings?.highContrastMode ?? false)
-													? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06]'
-													: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045]'
-												: 'hover:bg-base-100 dark:hover:bg-base-900'}"
+											class="grow flex items-center space-x-2 rounded-xl px-2 py-1.5 transition hover:bg-base-100 dark:hover:bg-base-900"
 											href={meta.href}
 											on:click={itemClickHandler}
 											draggable="true"

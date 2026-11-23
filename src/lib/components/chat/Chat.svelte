@@ -97,6 +97,7 @@
 	import { routeAvatarAnimation } from '$lib/utils/voice-avatar';
 	import { createTemporaryChatId, isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { canUseTemporaryChats } from '$lib/utils/settings-access';
+	import { resolveLocalizedModelPromptSuggestions } from '$lib/utils/localizedContent';
 	import { resumeTemporaryChat } from '$lib/apis';
 	import {
 		applyResponseStreamEvent,
@@ -164,6 +165,7 @@
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
 	import Placeholder from './Placeholder.svelte';
+	import Suggestions from './Suggestions.svelte';
 	import FilesOverlay from './MessageInput/FilesOverlay.svelte';
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
@@ -301,7 +303,7 @@
 
 	const eventTarget = new EventTarget();
 
-	let messageInput: MessageInput | undefined;
+	export let messageInput: MessageInput | undefined = undefined;
 	let messagesRef: Messages | undefined;
 
 	let autoScroll = true;
@@ -364,6 +366,12 @@
 	} else {
 		selectedModelIds = selectedModels;
 	}
+	$: modelSuggestionPrompts =
+		resolveLocalizedModelPromptSuggestions(atSelectedModel, $i18n.language) ??
+		resolveLocalizedModelPromptSuggestions(
+			($models ?? []).find((model) => model.id === selectedModels[selectedModelIdx]),
+			$i18n.language
+		);
 	let serverContextUsage = null;
 	let contextUsage = null;
 
@@ -1074,7 +1082,10 @@
 
 		clearTimeout(saveControlsTimer);
 		await saveControls();
-		if (signal.aborted) return;
+		if (signal.aborted) {
+			pendingChatRequest = null;
+			return;
+		}
 		loading = true;
 
 		prompt = '';
@@ -2868,6 +2879,15 @@
 		routeChanged = false;
 		void followRoute();
 	}
+	// A chat opened by link needs no model list, so its request starts before the list is in.
+	let pendingChatRequest: { id: string; promise: ReturnType<typeof getChatById> } | null = null;
+	$: if (routeChanged && $models === null && $page.params.id !== pendingChatRequest?.id) {
+		pendingChatRequest =
+			$page.route.id === '/(app)/c/[id]'
+				? { id: $page.params.id, promise: getChatById(localStorage.token, $page.params.id) }
+				: null;
+		pendingChatRequest?.promise.catch(() => {});
+	}
 	afterNavigate(() => {
 		routeChanged = !embedded;
 		stopAudio();
@@ -3330,7 +3350,12 @@
 		}
 
 		const id = $chatId;
-		const loadedChat = await getChatById(localStorage.token, id, signal).catch(async (error) => {
+		const request =
+			pendingChatRequest?.id === id
+				? pendingChatRequest.promise
+				: getChatById(localStorage.token, id, signal);
+		pendingChatRequest = null;
+		const loadedChat = await request.catch(async (error) => {
 			if (tabbed && !signal.aborted) toast.error(`${error}`);
 			console.error('[note-chat] getChatById failed', {
 				chatIdProp,
@@ -4527,13 +4552,18 @@
 		const id = $chatId;
 		generatingTitle = true;
 		titleDraft = '';
-		const messages = createMessagesList(history, history.currentId).map((message) => ({
+		const branch = createMessagesList(history, history.currentId);
+		const messages = branch.map((message) => ({
 			role: message.role,
 			content: getOutputText(message.output) || message.content || ''
 		}));
+		const modelId = selectedModels.find((modelId: string) => modelId) ?? '';
+		const responseMessage = branch
+			.filter((message) => message.role === 'assistant' && message.model === modelId)
+			.at(-1);
 		const generatedTitle = await generateTitle(
 			localStorage.token,
-			selectedModels.find((modelId: string) => modelId) ?? '',
+			responseMessage?.selectedModelId ?? modelId,
 			messages
 		).catch((error) => {
 			toast.error(`${error}`);
@@ -5560,6 +5590,7 @@
 		if (history.messages[message.id].done == true) {
 			const responseMessage = history.messages[message.id];
 			responseMessage.done = false;
+			responseMessage.error = null;
 			await tick();
 
 			const model = ($models ?? [])
@@ -6506,6 +6537,15 @@
 											</p>
 										</div>
 									</div>
+									{#if modelSuggestionPrompts?.length}
+										<div class="mx-auto w-full max-w-2xl px-5 pb-3">
+											<Suggestions
+												suggestionPrompts={modelSuggestionPrompts}
+												inputValue={prompt}
+												{onSelect}
+											/>
+										</div>
+									{/if}
 								{:else if suggestedPrompts.length > 0 && !embeddedCollapsed}
 									<div class="flex flex-1 items-end px-5 pb-8">
 										<div class="w-full">
