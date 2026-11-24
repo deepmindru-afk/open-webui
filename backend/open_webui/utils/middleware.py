@@ -2123,7 +2123,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     chat_id = metadata.get('chat_id')
     user_message_id = metadata.get('user_message_id')
     pending_assistant_message = None
-    chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
+    chat = await Chats.get_chat_metadata_by_id(chat_id) if is_saved_chat_id(chat_id) else None
     is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
     use_builtin_tools = is_note_chat or (
         bool(metadata.get('session_id'))
@@ -6165,10 +6165,7 @@ async def streaming_chat_response_handler(response, ctx):
                         }
 
                         if ENABLE_RESPONSES_API_STATEFUL and last_response_id:
-                            system_message = get_system_message(form_data['messages'])
-                            new_form_data['messages'] = (
-                                [system_message] if system_message else []
-                            ) + convert_output_to_messages(
+                            new_form_data['messages'] = convert_output_to_messages(
                                 strip_tool_images(output, model), raw=True, reasoning_format=get_reasoning_format(model)
                             )
                             new_form_data['previous_response_id'] = last_response_id
