@@ -84,7 +84,14 @@ type ChannelListItem = {
 export const channels = writable<ChannelListItem[]>([]);
 export const channelId = writable(null);
 
-export { chats, pinnedChats, recentChats, refreshRecentChats } from './chatList';
+export {
+	chats,
+	pinnedChats,
+	recentChats,
+	refreshRecentChats,
+	activeFolders,
+	refreshActiveFolders
+} from './chatList';
 export const pinnedNotes = writable([]);
 export const tags = writable([]);
 export const folders = writable([]);
@@ -227,6 +234,8 @@ export const embed = writable<any>(null);
 /** Whether the main chat is temporary, or for a new chat, whether it starts as one. */
 export const temporaryChat = writable(false);
 export const openEmbeddedChatIds = writable<Set<string>>(new Set());
+/** The saved chat whose tab is in front, when it is not the main chat. */
+export const activeChatTabId = writable<string | null>(null);
 export const chatTabRequest = writable<
 	{ parentChatId: string; prompt: string } | { folderId: string } | null
 >(null);
@@ -383,6 +392,8 @@ type Settings = {
 	recentEmojis?: string[];
 	pinnedMenuItems?: string[];
 	pinnedNotesOrder?: string[];
+	/** Folder ids in display order, by parent folder id ('root' for top-level folders). */
+	folderOrder?: Record<string, string[]>;
 
 	defaultUploadContext?: 'full' | 'focused';
 

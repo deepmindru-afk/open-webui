@@ -1,13 +1,14 @@
 import logging
 import mimetypes
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from open_webui.config import UPLOAD_DIR
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event
@@ -17,6 +18,8 @@ from open_webui.models.automations import AutomationResponse, AutomationRuns, Au
 from open_webui.models.chat_messages import ChatMessages
 from open_webui.models.chats import FOLDER_PRIORITIES, NO_FOLDER_PRIORITY, Chats
 from open_webui.models.config import Config
+from open_webui.models.chat_views import read_bounded_view
+from open_webui.models.folder_views import FolderViewStateForm, FolderViewStates
 from open_webui.models.folders import (
     FolderForm,
     FolderModel,
@@ -38,6 +41,7 @@ from open_webui.utils.access_control import (
 )
 from open_webui.utils.access_control.files import can_read_all_folder_files, get_accessible_folder_files
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.machines import machine_id_of
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,6 +150,90 @@ async def get_folders(
         FolderNameIdResponse(**folder.model_dump(), unread_count=unread_counts.get(folder.id, 0))
         for folder in folder_list
     ]
+
+
+# Folders to continue in: a chat running or waiting, or tabs left open.
+
+
+class ActiveFolderResponse(BaseModel):
+    id: str
+    name: str
+    machine_id: str | None = None
+    directory: str | None = None
+    waiting: bool = False
+    running: bool = False
+    terminals: int = 0
+    ports: list[int] = []
+    tabs: list[str] = []
+    updated_at: int = 0
+
+
+@router.get('/active', response_model=list[ActiveFolderResponse])
+async def get_active_folders(
+    request: Request,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    folders = {folder.id: folder for folder in await Folders.get_folders_by_user_id(user.id, db=db)}
+    for folder in await get_shared_folders(request, user, db):
+        folders.setdefault(folder['id'], FolderModel.model_validate(folder))
+    folder_ids = list(folders)
+    active_chats = await Chats.get_active_chats(user.id, folder_ids, db=db)
+    views = await FolderViewStates.get_by_folder_ids(user.id, folder_ids, db)
+
+    active = {
+        folder.id: ActiveFolderResponse(
+            id=folder.id,
+            name=folder.name,
+            machine_id=machine_id_of(folder.data or {}),
+            directory=(folder.data or {}).get('working_directory'),
+        )
+        for folder in folders.values()
+    }
+    for chat_id, (folder_id, waiting, updated_at) in active_chats.items():
+        if waiting:
+            active[folder_id].waiting = True
+        elif await has_active_tasks(request.app.state.redis, chat_id):
+            active[folder_id].running = True
+        else:
+            continue
+        active[folder_id].updated_at = max(active[folder_id].updated_at, updated_at)
+    for folder_id, view in views.items():
+        # These are tabs left open; whether the machine still runs them is not asked.
+        tabs = ((view.state or {}).get('panels') or {}).get('tabs') or []
+        # The main chat tab is the folder page itself.
+        if not any(
+            tab.get('id') != 'main-chat' and tab.get('kind') in ('chat', 'file', 'terminal', 'browser', 'desktop')
+            for tab in tabs
+        ):
+            continue
+        active[folder_id].tabs = [
+            tab['label']
+            for tab in tabs
+            if tab.get('id') != 'main-chat' and tab.get('kind') in ('chat', 'file') and tab.get('label')
+        ][:2]
+        active[folder_id].terminals = sum(tab.get('kind') == 'terminal' for tab in tabs)
+        active[folder_id].ports = sorted(
+            {
+                int(match[1])
+                for tab in tabs
+                if tab.get('kind') == 'browser'
+                # The label becomes the page's title, so the port is read from the address.
+                and (match := re.match(r'https?://(?:localhost|127\.0\.0\.1):(\d{1,5})(?:[/?#]|$)', tab.get('path') or ''))
+            }
+        )
+        active[folder_id].updated_at = max(active[folder_id].updated_at, view.updated_at)
+
+    results = [folder for folder in active.values() if folder.updated_at]
+    results.sort(
+        key=lambda folder: (
+            folder.waiting,
+            folder.running,
+            folder.updated_at,
+        ),
+        reverse=True,
+    )
+    return results[:3]
 
 
 # Create Folder
@@ -749,6 +837,40 @@ async def check_folder_read_access(request: Request, id: str, user, db: AsyncSes
     return folder
 
 
+# A view is private to its authenticated viewer, even for shared folders.
+@router.get('/{id}/view')
+async def get_folder_view(
+    request: Request, id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)
+):
+    await check_folder_read_access(request, id, user, db)
+    return await FolderViewStates.get(user.id, id, db)
+
+
+async def bounded_folder_view(request: Request):
+    body = await read_bounded_view(request)
+    try:
+        return FolderViewStateForm.model_validate_json(body)
+    except ValueError:
+        raise HTTPException(status_code=422, detail='Invalid folder view')
+
+
+@router.post('/{id}/view')
+async def update_folder_view(
+    request: Request,
+    id: str,
+    user=Depends(get_verified_user),
+    form: FolderViewStateForm = Depends(bounded_folder_view),
+    db: AsyncSession = Depends(get_async_session),
+):
+    await check_folder_read_access(request, id, user, db)
+    saved = await FolderViewStates.save(
+        user.id, id, form.state.model_dump(exclude_unset=True), form.revision, db
+    )
+    if not saved:
+        return JSONResponse(await FolderViewStates.get(user.id, id, db), status_code=409)
+    return saved
+
+
 @router.get('/{id}/automations')
 async def get_folder_automations(
     request: Request, id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)
@@ -981,6 +1103,7 @@ async def delete_folder_by_id(
         if folder:
             try:
                 folder_ids = await Folders.delete_folder_by_id_and_user_id(folder.id, folder_owner_id, db=db)
+                await FolderViewStates.delete_by_folder_ids(folder_ids, db)
 
                 for folder_id in folder_ids:
                     if delete_contents:
