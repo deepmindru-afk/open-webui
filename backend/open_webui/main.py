@@ -653,8 +653,9 @@ async def initialize_runtime_config(app: FastAPI):
         if tool_server_connection.get('type', 'openapi') == 'mcp':
             server_id = (tool_server_connection.get('info') or {}).get('id')
             auth_type = tool_server_connection.get('auth_type', 'none')
+            oauth_client_info = (tool_server_connection.get('info') or {}).get('oauth_client_info', '')
 
-            if server_id and auth_type in ('oauth_2.1', 'oauth_2.1_static'):
+            if server_id and auth_type in ('oauth_2.1', 'oauth_2.1_static') and oauth_client_info:
                 try:
                     oauth_client_info = resolve_oauth_client_info(tool_server_connection)
                     oauth_client_info = await recover_oauth_client_metadata(tool_server_connection, oauth_client_info)
@@ -2482,6 +2483,7 @@ async def get_app_config(request: Request):
         'rag.full_context',
         'rag.bypass_embedding_and_retrieval',
         'rag.full_context_char_threshold',
+        'rag.full_text_threshold_type',
         'file.image_compression_width',
         'file.image_compression_height',
         'user.permissions',
@@ -2622,7 +2624,8 @@ async def get_app_config(request: Request):
                     'full_context': bool(
                         config.get('rag.full_context') or config.get('rag.bypass_embedding_and_retrieval')
                     ),
-                    'full_text_char_threshold': config.get('rag.full_context_char_threshold'),
+                    'full_text_threshold': config.get('rag.full_context_char_threshold'),
+                    'full_text_threshold_type': config.get('rag.full_text_threshold_type'),
                     'image_compression': {
                         'width': config.get('file.image_compression_width'),
                         'height': config.get('file.image_compression_height'),
