@@ -29,6 +29,7 @@
 		tools,
 		skills,
 		socket,
+		onSocketRestored,
 		functions,
 		tags,
 		banners,
@@ -174,10 +175,10 @@
 			} else if (event?.data?.type === 'access:updated') void refreshAccess();
 		};
 		socketInstance?.on('events', eventHandler);
-		socketInstance?.on('connect', changed);
+		const unsubscribe = onSocketRestored(changed);
 		return () => {
 			socketInstance?.off('events', eventHandler);
-			socketInstance?.off('connect', changed);
+			unsubscribe();
 		};
 	});
 
@@ -428,22 +429,13 @@
 		// selectedTerminalId is the former key.
 		const storedMachineId = localStorage.selectedMachineId ?? localStorage.selectedTerminalId;
 		delete localStorage.selectedTerminalId;
+		if (storedMachineId) localStorage.selectedMachineId = storedMachineId;
 		selectedMachineId.set(
 			$config?.features?.enable_tool_servers &&
 				$machines?.some((machine) => machine.id === storedMachineId)
 				? storedMachineId
 				: null
 		);
-
-		// Persist selectedMachineId across page loads
-		selectedMachineId.subscribe((value) => {
-			if (!$config?.features?.enable_tool_servers) return;
-			if (value === null) {
-				delete localStorage.selectedMachineId;
-			} else {
-				localStorage.selectedMachineId = value;
-			}
-		});
 
 		// Set last: the chat sets itself up once the model list is in, and that set-up
 		// reads tools, machines and the selected machine as well.

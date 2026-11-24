@@ -37,7 +37,17 @@ export const MODEL_DOWNLOAD_POOL = writable({});
 export const mobile = writable(false);
 
 export const socket: Writable<null | Socket> = writable(null);
-export const socketConnected: Writable<boolean> = writable(true);
+export const socketLost: Writable<boolean> = writable(false);
+
+// Runs when a lost connection comes back, not when it is first made.
+export const onSocketRestored = (callback: () => void) => {
+	let lost = false;
+	return socketLost.subscribe((value) => {
+		if (lost && !value) callback();
+		lost = value;
+	});
+};
+
 export const activeUserIds: Writable<null | string[]> = writable(null);
 export const USAGE_POOL: Writable<null | string[]> = writable(null);
 
@@ -212,7 +222,7 @@ export const showFileNavPath: Writable<FileNavOpenRequest | null> = writable(nul
 export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedMachineId: Writable<string | null> = writable(null);
 
-export const embed = writable(null);
+export const embed = writable<any>(null);
 
 /** Whether the main chat is temporary, or for a new chat, whether it starts as one. */
 export const temporaryChat = writable(false);

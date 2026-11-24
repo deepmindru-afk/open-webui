@@ -113,12 +113,14 @@
 	import GitBar from './Tabs/GitBar.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './Tabs/Embeds.svelte';
+	import Database from '$lib/components/icons/Database.svelte';
+	import Knowledge from './Tabs/Knowledge.svelte';
 	import ChatTab from './Tabs/ChatTab.svelte';
 	import PyodideFileNav from './PyodideFileNav.svelte';
 	import ConfirmDialog from '../common/ConfirmDialog.svelte';
 	let stopTerminalChoice: ((stop: boolean) => void) | null = null;
 	import SplitPanel from '../icons/SplitPanel.svelte';
-	import { isSavedChatId } from '$lib/utils/chatId';
+	import { isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 
 	const i18n = getContext<any>('i18n');
 	const appLayout = getContext<AppLayoutContext | undefined>('appLayout');
@@ -405,7 +407,20 @@
 			if (viewState !== loading) return;
 			// The chat restores its machine and directory together; layouts must not override them.
 			entry.state.selectedMachineId = $selectedMachineId;
-			entry.state.panels = setMainChatTab(entry.state.panels, true, mainTabTitle);
+			let panels = setMainChatTab(entry.state.panels, true, mainTabTitle);
+			const mainGroup = panels.groups.find((group) => group.tabIds.includes(mainChatTabId));
+			const activeIds = [panels.activeId, mainGroup?.activeId];
+			// Opening a chat shows that chat, not the page or other chat it was left on.
+			if (
+				panels.tabs.some(
+					(tab) =>
+						activeIds.includes(tab.id) &&
+						tab.id !== mainChatTabId &&
+						(tab.kind === 'page' || tab.kind === 'chat')
+				)
+			)
+				panels = activateTab(panels, mainChatTabId);
+			entry.state.panels = panels;
 			tabs = entry.state.panels;
 			dirtyFiles = {};
 			fileContexts = {};
@@ -932,16 +947,13 @@
 		const sourceTabId = embedSourceTab?.id;
 		const sourceGroup = tabs.groups.find((group) => group.tabIds.some((id) => id === sourceTabId));
 		// Each cited source has its own tab; citing it again shows the new passages there.
-		const id = `preview:${$embed.file?.id ?? $embed.url}`;
+		const id = `preview:${$embed.file?.id ?? $embed.key ?? $embed.url}`;
 		tabs = {
 			...tabs,
 			tabs: tabs.tabs.map((tab) => (tab.id === id ? { ...tab, embed: $embed } : tab))
 		};
-		// A file cited in the main chat opens beside it, so the answer stays readable.
-		openPanel(
-			{ id, kind: 'preview', label: $i18n.t('Preview'), embed: $embed },
-			!sourceGroup && !!$embed.file
-		);
+		// A source cited in the main chat opens beside it, so the answer stays readable.
+		openPanel({ id, kind: 'preview', label: $i18n.t('Preview'), embed: $embed }, !sourceGroup);
 		// A source cited in a chat tab opens in that tab's group, so the main chat stays in view.
 		if (sourceGroup) tabs = moveTabToGroup(tabs, id, sourceGroup.id);
 	};
@@ -1488,8 +1500,8 @@
 	// A chat's artifacts or Overview tab names the chat it belongs to.
 	$: tabLabel = (tab: Tab) => {
 		if (tab.kind === 'terminal') return terminalTitles[tab.sessionId ?? ''] || tab.label;
-		// A cited file is named like any other file tab.
-		if (tab.kind === 'preview' && tab.embed?.file) return tab.embed.title || tab.label;
+		// A cited file or web page names its own tab.
+		if (tab.kind === 'preview') return tab.embed?.title || tab.label;
 		const source =
 			(tab.kind === 'artifacts' || tab.kind === 'overview') &&
 			tab.sourceTabId &&
@@ -1499,9 +1511,17 @@
 		return source ? `${tab.label} · ${source.label}` : tab.label;
 	};
 	$: showArtifactsTab = $mainArtifacts.length > 0 && $visibleControls['chat.artifacts'];
+	// A temporary side chat tab keeps no chat id; a citation clicked there comes from the active tab.
 	$: embedSourceTab =
 		$embed?.chatId && $embed.chatId !== chatId
-			? tabs.tabs.find((tab) => tab.kind === 'chat' && tab.chatId === $embed.chatId)
+			? (tabs.tabs.find((tab) => tab.kind === 'chat' && tab.chatId === $embed.chatId) ??
+				($showEmbeds &&
+				isTemporaryChatId($embed.chatId) &&
+				activeTab?.kind === 'chat' &&
+				activeTab.id !== mainChatTabId &&
+				!activeTab.chatId
+					? activeTab
+					: undefined))
 			: undefined;
 	$: showPreviewTab = !!$embed && ($embed.chatId === chatId || !!embedSourceTab);
 	$: availableViews = [
@@ -2135,7 +2155,11 @@
 						on:close={() => closeTab(tab.id)}
 					/>
 				{:else if tab.kind === 'preview'}
-					<Embeds embed={tab.embed} overlay={isDragging} />
+					{#if tab.embed?.file?.knowledgeId}
+						<Knowledge embed={tab.embed} chatId={chatId ?? ''} />
+					{:else}
+						<Embeds embed={tab.embed} overlay={isDragging} />
+					{/if}
 				{:else if tab.kind === 'artifacts'}
 					{@const source = tabs.tabs.find((item) => item.id === tab.sourceTabId)}
 					<Artifacts
@@ -2496,6 +2520,8 @@
 								{:else}
 									<Icon name="folder" size={14} />
 								{/if}
+							{:else if tab.kind === 'preview' && tab.embed?.file?.knowledgeId}
+								<Database className="size-3.5 shrink-0" />
 							{:else if tab.kind === 'file' || (tab.kind === 'preview' && tab.embed?.file)}
 								<Icon name={fileIconName(tabLabel(tab))} size={14} strokeWidth={1.4} />
 							{:else if tab.kind === 'terminal'}
