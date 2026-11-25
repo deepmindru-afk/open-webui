@@ -7,35 +7,35 @@
 	let pending: Record<string, unknown> | null = null;
 	let frame = 0;
 	export const draw = (packet: ArrayBuffer) => frames.draw(packet);
+	export const supportsH264 = () => frames.supportsH264();
 	const flush = () => {
 		cancelAnimationFrame(frame);
 		if (pending) send(pending);
 		pending = null;
 		frame = 0;
 	};
-	const pointer = (event: PointerEvent) => {
+	const position = (event: MouseEvent) => {
 		const canvas = surface.querySelector('canvas');
-		if (!canvas) return;
-		const box = canvas.getBoundingClientRect();
-		const x = Math.max(
-			0,
-			Math.min(
-				canvas.width - 1,
-				Math.floor(((event.clientX - box.left) * canvas.width) / box.width)
-			)
-		);
-		const y = Math.max(
-			0,
-			Math.min(
-				canvas.height - 1,
-				Math.floor(((event.clientY - box.top) * canvas.height) / box.height)
-			)
-		);
+		const box = canvas?.getBoundingClientRect();
+		if (!canvas || !box?.width || !box.height) return null;
+		const x = Math.floor(((event.clientX - box.left) * canvas.width) / box.width);
+		const y = Math.floor(((event.clientY - box.top) * canvas.height) / box.height);
+		return {
+			type: 'mouse',
+			x: Math.max(0, Math.min(canvas.width - 1, x)),
+			y: Math.max(0, Math.min(canvas.height - 1, y)),
+			// Back and forward buttons have no desktop equivalent.
+			buttons: event.buttons & 7
+		};
+	};
+	const pointer = (event: PointerEvent) => {
+		const mouse = position(event);
+		if (!mouse) return;
 		if (event.type === 'pointerdown') {
 			surface.focus();
 			surface.setPointerCapture(event.pointerId);
 		}
-		pending = { type: 'mouse', x, y, buttons: event.buttons };
+		pending = mouse;
 		if (event.type !== 'pointermove') flush();
 		else if (!frame) frame = requestAnimationFrame(flush);
 	};
@@ -74,27 +74,18 @@
 	on:paste|preventDefault|stopPropagation={(event) =>
 		send({ type: 'paste', text: event.clipboardData?.getData('text/plain') ?? '' })}
 	on:wheel|preventDefault={(event) => {
-		const canvas = surface.querySelector('canvas');
-		if (!canvas) return;
-		const box = canvas.getBoundingClientRect();
+		const mouse = position(event);
+		if (!mouse) return;
 		flush();
+		const canvas = surface.querySelector('canvas')!;
+		const box = canvas.getBoundingClientRect();
+		// Some browsers report mouse wheels in lines or pages.
+		const unit = [1, 16, box.height][event.deltaMode] * (canvas.width / box.width);
 		send({
-			type: 'mouse',
-			x: Math.max(
-				0,
-				Math.min(
-					canvas.width - 1,
-					Math.floor(((event.clientX - box.left) * canvas.width) / box.width)
-				)
-			),
-			y: Math.max(
-				0,
-				Math.min(
-					canvas.height - 1,
-					Math.floor(((event.clientY - box.top) * canvas.height) / box.height)
-				)
-			),
-			buttons: event.buttons,
+			...mouse,
+			scrollX: event.deltaX * unit,
+			scrollY: event.deltaY * unit,
+			// Older servers scroll by notches instead.
 			deltaX: Math.sign(event.deltaX) * Math.ceil(Math.abs(event.deltaX) / 100),
 			deltaY: Math.sign(event.deltaY) * Math.ceil(Math.abs(event.deltaY) / 100)
 		});
