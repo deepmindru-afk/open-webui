@@ -13,7 +13,8 @@
 		copyToClipboard as _copyToClipboard,
 		formatMessageTimestamp,
 		formatMessageTimestampFull,
-		isRasterImageContentType
+		isRasterImageContentType,
+		isInternalMessage
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import equal from 'fast-deep-equal';
@@ -28,6 +29,8 @@
 	import Image from '$lib/components/common/Image.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import SubagentResultRow from './SubagentResultRow.svelte';
+	import ChatMessageRow from './ChatMessageRow.svelte';
+	import TimerRow from './TimerRow.svelte';
 	import { getChatContext } from '$lib/components/chat/context';
 
 	const { models } = getChatContext();
@@ -82,7 +85,6 @@
 					: null;
 	$: isOwn = Boolean($_user?.id && authorId === $_user.id);
 	$: authorName = author?.name || $i18n.t('Unknown User');
-	let timerExpanded = false;
 	$: if (history.messages) {
 		const source = history.messages[messageId];
 		if (source) {
@@ -168,7 +170,7 @@
 	id="message-{message.id}"
 	style="scroll-margin-top: 3rem;"
 >
-	{#if !compactPreview && (!chatBubble || !isOwn) && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
+	{#if !compactPreview && (!chatBubble || !isOwn) && !isInternalMessage(message)}
 		<div class="shrink-0 me-2 {chatBubble ? 'mt-6' : 'hidden @lg:flex mt-0.5'}">
 			<!-- LICENSE covers this Open WebUI fallback logo.
 			Do not alter, remove, obscure, or replace it except as LICENSE permits:
@@ -183,14 +185,8 @@
 			</ProfilePreview>
 		</div>
 	{/if}
-	<div
-		class="flex-auto w-0 max-w-full {(message?.meta?.internal === true &&
-			message?.meta?.type === 'subagent') ||
-		(message?.meta?.internal === true && message?.meta?.type === 'timer')
-			? ''
-			: 'pl-1'}"
-	>
-		{#if !compactPreview && (!chatBubble || !isOwn) && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
+	<div class="flex-auto w-0 max-w-full {isInternalMessage(message) ? '' : 'pl-1'}">
+		{#if !compactPreview && (!chatBubble || !isOwn) && !isInternalMessage(message)}
 			<div class={chatBubble ? 'mb-1 ps-2 text-xs text-base-400 dark:text-base-500' : ''}>
 				{#if chatBubble}
 					{authorName}
@@ -381,42 +377,12 @@
 						</div>
 					</div>
 				</div>
-			{:else if message?.meta?.internal === true && message?.meta?.type === 'timer'}
-				<div class="w-full min-w-0">
-					<button
-						type="button"
-						class="flex w-full min-w-0 items-center gap-2 text-left text-base-500 transition-colors hover:text-base-700 dark:text-base-400 dark:hover:text-base-300"
-						aria-expanded={timerExpanded}
-						on:click={() => {
-							timerExpanded = !timerExpanded;
-						}}
-					>
-						<span class="shrink-0 text-[0.75rem] font-medium">{$i18n.t('Timer')}</span>
-						<span class="min-w-0 flex-1 truncate text-[0.75rem]">{message.content}</span>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke-width="2"
-							stroke="currentColor"
-							class="size-3 shrink-0 text-base-400 transition-transform duration-150 dark:text-base-600 {timerExpanded
-								? 'rotate-180'
-								: ''}"
-						>
-							<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-						</svg>
-					</button>
-					{#if timerExpanded}
-						<div
-							class="mt-2 ml-3 whitespace-pre-wrap break-words border-l border-base-100 pl-3 text-[0.78125rem] leading-relaxed text-base-600 dark:border-base-0/10 dark:text-base-400"
-							dir={$settings?.chatDirection ?? 'auto'}
-						>
-							{message.content}
-						</div>
-					{/if}
-				</div>
-			{:else if message?.meta?.internal === true && message?.meta?.type === 'subagent'}
-				<SubagentResultRow content={message.content} result={message.meta} />
+			{:else if isInternalMessage(message) && message.meta.type === 'timer'}
+				<TimerRow content={message.content} />
+			{:else if isInternalMessage(message) && message.meta.type === 'message'}
+				<ChatMessageRow content={message.content} />
+			{:else if isInternalMessage(message)}
+				<SubagentResultRow content={message.content} />
 			{:else if message.content !== ''}
 				<div class="w-full">
 					<div
@@ -473,7 +439,7 @@
 				</div>
 			{/if}
 
-			{#if edit !== true && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
+			{#if edit !== true && !isInternalMessage(message)}
 				<div
 					class="buttons flex items-center {chatBubble
 						? isOwn

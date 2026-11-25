@@ -18,10 +18,11 @@
 	const { saveAs } = fileSaver;
 
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { navigating, page } from '$app/stores';
 	import { toast } from 'svelte-sonner';
 
 	import {
+		activeChatTabId,
 		chatId,
 		chatTabRequest,
 		config,
@@ -43,6 +44,7 @@
 		removeFolderState,
 		isCancelledFolderRequest
 	} from '$lib/stores/folderStates';
+	import { pendingChatRequest } from '$lib/stores/chatCache';
 	import { refreshFolderChatLists } from '$lib/stores/chatList';
 	import { sortFolders } from '$lib/utils/folders';
 	import { updateNoteFolderIdById } from '$lib/apis/notes';
@@ -628,8 +630,14 @@
 		if (open) void setFolderItems(false, false);
 	}
 
+	$: current = $navigating?.to
+		? $navigating.to.params?.folderId === folderId
+		: $selectedFolder?.id === folderId &&
+			!$activeChatTabId &&
+			!($pendingChatRequest && $pendingChatRequest.id === $page.params.id);
+
 	const openFolderHandler = async () => {
-		await goto(`/folders/${folderId}`);
+		await goto(`/folders/${folderId}`, { keepFocus: true });
 		if ($mobile) showSidebar.set(false);
 	};
 
@@ -793,7 +801,11 @@
 			<div
 				bind:this={rowElement}
 				id="folder-{folderId}-button"
-				class="relative w-full py-1 px-1.5 rounded-xl flex items-center gap-1.5 hover:bg-base-100 dark:hover:bg-base-900 transition"
+				class="relative w-full py-1 px-1.5 rounded-xl flex items-center gap-1.5 transition {current
+					? ($settings?.highContrastMode ?? false)
+						? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06]'
+						: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045]'
+					: 'hover:bg-base-100 dark:hover:bg-base-900'}"
 				on:click|stopPropagation
 			>
 				<button
@@ -844,8 +856,16 @@
 							id="folder-{folderId}-input"
 							type="text"
 							bind:value={name}
-							on:blur={() => {
-								console.log('Blur');
+							on:blur={(e) => {
+								// Opening the folder focuses its composer while a rename is in progress.
+								// A composer the user pressed is active; one focused by the page is not.
+								const input = e.currentTarget;
+								const composer = e.relatedTarget?.closest('[data-composer-id]');
+								if (composer && !composer.matches(':active')) {
+									setTimeout(() => input.focus());
+									return;
+								}
+
 								updateHandler({ name });
 								edit = false;
 							}}
@@ -931,7 +951,8 @@
 						<FolderMenu
 							onNewChat={async () => {
 								if ($selectedFolder?.id !== folderId) await openFolderHandler();
-								if ($page.params.folderId === folderId) chatTabRequest.set({ folderId });
+								if ($page.params.folderId === folderId || $selectedFolder?.id === folderId)
+									chatTabRequest.set({ folderId });
 								if ($mobile) showSidebar.set(false);
 							}}
 							onNewNote={($config?.features?.enable_notes ?? false) &&

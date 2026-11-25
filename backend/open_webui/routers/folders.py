@@ -34,7 +34,7 @@ from open_webui.models.shared_chats import ChatShareMode
 from open_webui.models.users import Users
 from open_webui.routers.notes import check_notes_access, truncate_note_data
 from open_webui.socket.main import close_note
-from open_webui.tasks import has_active_tasks
+from open_webui.tasks import has_active_tasks, stop_item_tasks
 from open_webui.utils.access_control import (
     has_permission,
     validate_access_grants,
@@ -219,7 +219,11 @@ async def get_active_folders(
                 for tab in tabs
                 if tab.get('kind') == 'browser'
                 # The label becomes the page's title, so the port is read from the address.
-                and (match := re.match(r'https?://(?:localhost|127\.0\.0\.1):(\d{1,5})(?:[/?#]|$)', tab.get('path') or ''))
+                and (
+                    match := re.match(
+                        r'https?://(?:localhost|127\.0\.0\.1):(\d{1,5})(?:[/?#]|$)', tab.get('path') or ''
+                    )
+                )
             }
         )
         active[folder_id].updated_at = max(active[folder_id].updated_at, view.updated_at)
@@ -528,6 +532,12 @@ async def update_folder_parent_id_by_id(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT('Folder already exists'),
+            )
+
+        if form_data.parent_id and not await Folders.get_folder_by_id_and_user_id(form_data.parent_id, user.id, db=db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
             )
 
         if form_data.parent_id and form_data.parent_id in await Folders.get_folder_ids_by_id_and_user_id_in_subtree(
@@ -863,9 +873,7 @@ async def update_folder_view(
     db: AsyncSession = Depends(get_async_session),
 ):
     await check_folder_read_access(request, id, user, db)
-    saved = await FolderViewStates.save(
-        user.id, id, form.state.model_dump(exclude_unset=True), form.revision, db
-    )
+    saved = await FolderViewStates.save(user.id, id, form.state.model_dump(exclude_unset=True), form.revision, db)
     if not saved:
         return JSONResponse(await FolderViewStates.get(user.id, id, db), status_code=409)
     return saved
@@ -1107,9 +1115,17 @@ async def delete_folder_by_id(
 
                 for folder_id in folder_ids:
                     if delete_contents:
+                        for chat_id in await Chats.get_chat_ids_by_user_id_and_folder_id(
+                            folder_owner_id, folder_id, db=db
+                        ):
+                            await stop_item_tasks(request.app.state.redis, chat_id)
+                            for child_id in await Chats.get_internal_chat_ids_by_parent_id(chat_id, folder_owner_id):
+                                await stop_item_tasks(request.app.state.redis, child_id)
                         await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
                         for note in await Notes.get_notes_by_folder_id_and_user_id(folder_id, folder_owner_id, db=db):
                             await Notes.delete_note_by_id(note.id, db=db)
+                            for chat_id in await Chats.get_internal_chat_ids_by_note_id(note.id, db=db):
+                                await Chats.delete_chat_by_id(chat_id, db=db)
                             await close_note(note)
 
                     await Chats.move_chats_by_folder_id(folder_id, None, db=db)

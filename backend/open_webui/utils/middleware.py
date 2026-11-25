@@ -164,7 +164,11 @@ from open_webui.utils.task import (
     rag_template,
     tools_function_calling_generation_template,
 )
-from open_webui.utils.machines import filter_user_terminal_tools, upload_files_to_machine
+from open_webui.utils.machines import (
+    filter_user_terminal_tools,
+    save_tool_result_to_machine,
+    upload_files_to_machine,
+)
 from open_webui.utils.tool_approval import complete_tool_call, pending_tool_calls
 from open_webui.utils.tool_permissions import (
     ToolApprovalRequired,
@@ -252,7 +256,11 @@ async def publish_chat_finished_event(
     request: Request, user: UserModel, metadata: dict, title: str, content: str, output: list | None = None
 ):
     chat_id = metadata.get('chat_id')
-    if getattr(request.state, 'internal', False) is True or not is_saved_chat_id(chat_id):
+    if (
+        getattr(request.state, 'internal', False) is True
+        or getattr(request.state, 'subagent', False) is True
+        or not is_saved_chat_id(chat_id)
+    ):
         return
 
     content = content or get_output_text(output)
@@ -976,7 +984,13 @@ async def process_tool_result(
 
     max_chars = await Config.get('tools.output_max_chars')
     if max_chars and tool_result and len(tool_result) > max_chars:
-        tool_result = f'{tool_result[:max_chars]}\n\n[Truncated: {len(tool_result)} characters, limit {max_chars}]'
+        note = f'Truncated: {len(tool_result)} characters, limit {max_chars}'
+        # Machine tools read the saved file, so saving their results would only copy it again.
+        if tool_type != 'terminal':
+            path = await save_tool_result_to_machine(request, user, metadata, tool_result)
+            if path:
+                note += f', full result saved to {path} on the machine'
+        tool_result = f'{tool_result[:max_chars]}\n\n[{note}]'
 
     return tool_result, tool_result_files, tool_result_embeds
 
@@ -2643,7 +2657,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 skill_manifest += format_machine_skill_manifest_entry(skill)
                 continue
             if sid in activated_skill_ids or not use_builtin_tools or not model_builtin_tools.get('skills', True):
-                skill_name = unquote(sid.removeprefix(machine_skill_prefix))
+                skill_name = unquote(strip_machine_prefix(sid))
                 loaded = await get_machine_skill(
                     request,
                     user.model_dump(),
@@ -3667,10 +3681,8 @@ async def background_tasks_handler(ctx):
         return
 
     # Messages the user sent while this reply ran are answered now; follow-ups for it would go unused.
-    if (
-        is_saved_chat_id(metadata.get('chat_id'))
-        and not metadata.get('internal')
-        and await ChatMessages.has_queued_message(metadata['chat_id'], metadata['message_id'])
+    if is_saved_chat_id(metadata.get('chat_id')) and await ChatMessages.has_queued_message(
+        metadata['chat_id'], metadata['message_id']
     ):
         from open_webui.utils.subagents import get_pending_run, process_pending_internal_messages
 
@@ -4002,7 +4014,8 @@ async def outlet_filter_handler(ctx):
                     'id': m.get('id'),
                     'role': m.get('role'),
                     'content': m.get('content') or get_output_text(m.get('output')),
-                    'info': m.get('info'),
+                    # Filters written for older versions read usage under `info`.
+                    'info': m.get('info') or ({'usage': m['usage']} if m.get('usage') else None),
                     'timestamp': m.get('timestamp'),
                     # Deepcopy so in-place filter mutations do not alias messages_map's baseline
                     **({'output': copy.deepcopy(m['output'])} if m.get('output') else {}),
@@ -4235,6 +4248,8 @@ async def non_streaming_chat_response_handler(response, ctx):
                         content = get_output_text(response_output)
 
                     response_output = [*(metadata.get('initial_output') or []), *response_output]
+                    from open_webui.utils.subagents import has_upcoming_reply
+
                     await event_emitter(
                         {
                             'type': 'chat:completion',
@@ -4243,6 +4258,10 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 'done': True,
                                 'output': response_output,
                                 'title': title,
+                                'has_upcoming_reply': save_to_chat
+                                and await has_upcoming_reply(
+                                    request, user.id, metadata['chat_id'], metadata['message_id']
+                                ),
                             },
                         }
                     )
@@ -6588,6 +6607,12 @@ async def streaming_chat_response_handler(response, ctx):
                     current_output,
                 )
 
+                from open_webui.utils.subagents import has_upcoming_reply
+
+                # The page shows no notification until the last reply.
+                data['has_upcoming_reply'] = save_to_chat and await has_upcoming_reply(
+                    request, user.id, metadata['chat_id'], metadata['message_id']
+                )
                 await event_emitter(
                     {
                         'type': 'chat:completion',

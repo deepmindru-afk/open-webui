@@ -93,6 +93,7 @@ known_source_ext = [
     'yml',
     'toml',
     'svg',
+    'mdx',
 ]
 
 
@@ -555,7 +556,12 @@ class Loader:
             if max_file_size_bytes > 0:
                 try:
                     with zipfile.ZipFile(file_path) as archive:
-                        uncompressed_size = sum(entry.file_size for entry in archive.infolist())
+                        # Pivot caches duplicate sheet data and are never read by the built-in loaders.
+                        uncompressed_size = sum(
+                            entry.file_size
+                            for entry in archive.infolist()
+                            if not (file_ext in ['xlsx', 'xlsm'] and entry.filename.startswith('xl/pivotCache/'))
+                        )
                 except (zipfile.BadZipFile, OSError):
                     pass
                 else:
@@ -799,7 +805,7 @@ class Loader:
             elif file_content_type in [
                 'application/vnd.ms-excel',
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ] or file_ext in ['xls', 'xlsx']:
+            ] or file_ext in ['xls', 'xlsx', 'xlsm']:
                 try:
                     # Subtable detection is very slow on large sparse sheets.
                     loader = UnstructuredLoader(file_path, 'xlsx', find_subtable=False)

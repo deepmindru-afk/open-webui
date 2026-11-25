@@ -169,7 +169,7 @@
 			.filter((m) => {
 				if (viewOption === 'available') return availableModelIds.has(m.id) || isPresetModel(m);
 				if (viewOption === 'unavailable') return !availableModelIds.has(m.id) && !isPresetModel(m);
-				if (viewOption === 'base') return !isPresetModel(m);
+				if (viewOption === 'base') return availableModelIds.has(m.id) && !isPresetModel(m);
 				if (viewOption === 'workspace') return isPresetModel(m);
 				if (viewOption === 'router') return m?.owned_by === 'router';
 				if (viewOption === 'enabled') return m?.is_active ?? true;
@@ -1043,7 +1043,7 @@
 													: 'opacity-50 dark:opacity-50'} bg-transparent rounded-xl"
 											>
 												<img
-													src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}`}
+													src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}&v=${model.updated_at}`}
 													alt={$i18n.t('modelfile profile')}
 													class=" rounded-xl size-7 object-cover"
 													loading="lazy"

@@ -1480,6 +1480,10 @@ export const getWeekday = () => {
 	return weekdays[date.getDay()];
 };
 
+/** A message a sub-agent, timer or another chat started a reply with. */
+export const isInternalMessage = (message: any): boolean =>
+	message?.meta?.internal === true && ['subagent', 'timer', 'message'].includes(message.meta.type);
+
 export const createMessagesList = (history, messageId) => {
 	const list = [];
 	let currentId = messageId;

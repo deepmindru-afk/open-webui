@@ -845,7 +845,7 @@ async def leave_note(sid, data):
                 'note_ids': [id for id in session.get('note_ids', []) if id != note_id],
                 'note_locations': locations,
             }
-        await publish_note_presence(note_id)
+            await publish_note_presence(note_id)
 
 
 @sio.on('events:channel')
@@ -1158,6 +1158,8 @@ async def document_save_handler(document_id, data, user):
         page = document_page(note.data, document_id)
         if not isinstance(data.get('content'), dict):
             return None
+        if data['content'] == page['content']:
+            return note
         editor = await Users.get_user_by_id(user['id'])
         if not editor or not await has_access_to_note_files(note, get_content_files(data['content']), editor):
             raise ValueError('Cannot attach files you cannot access')
@@ -1613,7 +1615,8 @@ async def get_event_emitter(request_info, update_db=True):
                 {
                     'chat_id': chat_id,
                     'message_id': message_id,
-                    **({'internal': True} if internal else {}),
+                    # The page shows no notifications for these.
+                    **({'internal': True} if internal or request_info.get('subagent') else {}),
                     'data': event_data,
                 },
                 room=room,

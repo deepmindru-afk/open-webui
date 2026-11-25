@@ -22,6 +22,7 @@
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	import type { ChatParticipant } from '$lib/apis/folders';
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
+	import { navigating, page } from '$app/stores';
 	import { onMount, getContext, createEventDispatcher, tick } from 'svelte';
 	import { LinkPreview } from 'bits-ui';
 	import { readable, type Readable } from 'svelte/store';
@@ -39,6 +40,8 @@
 	} from '$lib/apis/chats';
 	import {
 		activeChatTabId,
+		openEmbeddedChatIds,
+		selectedFolder,
 		chatId,
 		folders,
 		pinnedChats,
@@ -46,12 +49,12 @@
 		mobile,
 		showSidebar,
 		tags,
-		selectedFolder,
 		settings,
 		user
 	} from '$lib/stores';
 	import { refreshSidebar, setChatTitle } from '$lib/stores/chatList';
 	import { updateFolderChatLists } from '$lib/stores/folderStates';
+	import { getCachedChat, pendingChatRequest, requestChat } from '$lib/stores/chatCache';
 	import { closeChatTabs } from '$lib/stores/chatViewStates';
 
 	import ChatMenu from './ChatMenu.svelte';
@@ -179,8 +182,14 @@
 		menuOpen ||
 		selected ||
 		multiSelected;
+	// The row clicked shows at once; the chat being left does not stay beside it.
+	$: current =
+		!$navigating?.to?.params?.folderId &&
+		($pendingChatRequest && $pendingChatRequest.id === $page.params.id
+			? id === $page.params.id
+			: (id === $chatId && !$selectedFolder) || id === $activeChatTabId);
 	$: chatItemClass = ` w-full flex justify-between rounded-xl px-2 py-1.5 ${
-		id === $chatId || id === $activeChatTabId || confirmEdit
+		current || confirmEdit
 			? ($settings?.highContrastMode ?? false)
 				? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06] selected'
 				: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045] selected'
@@ -206,10 +215,6 @@
 		}
 		dispatch('select');
 
-		if ($selectedFolder) {
-			selectedFolder.set(null);
-		}
-
 		// Optimistically mark as read in UI when clicked
 		unread = false;
 		lastReadAt = Date.now() / 1000;
@@ -219,6 +224,14 @@
 			void goto(`/c/${id}`);
 			showSidebar.set(false);
 		}
+	};
+
+	// The press comes before the click that opens the chat.
+	const pressChatHandler = (event: PointerEvent) => {
+		if (event.pointerType !== 'mouse' || event.button !== 0 || selecting) return;
+		if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+		if (id === $chatId || $openEmbeddedChatIds.has(id) || getCachedChat(id)) return;
+		void requestChat(id);
 	};
 
 	const renameChatFromDoubleClick = async (e: MouseEvent) => {
@@ -814,6 +827,7 @@
 						href="/c/{id}"
 						aria-label={chatTitle || title}
 						aria-current={id === $chatId ? 'page' : undefined}
+						onpointerdown={pressChatHandler}
 						onclick={selectChatHandler}
 						ondblclick={renameChatFromDoubleClick}
 						draggable="false"

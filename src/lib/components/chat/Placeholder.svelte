@@ -59,6 +59,8 @@
 	export let files = [];
 	export let machineContext: MachineContext | null = null;
 	export let machineSelectionEnabled = true;
+	export let disabled = false;
+	export let placeholder = '';
 	export let selectedMachineId: Pick<Writable<string | null>, 'subscribe' | 'set'>;
 	export let machineSkills: Writable<any[]>;
 	export let messageInput = null;
@@ -152,10 +154,11 @@
 		!$selectedFolder.write_access;
 </script>
 
-{#snippet composer(placeholder = '')}
+{#snippet composer(defaultPlaceholder = '')}
 	<MessageInput
 		{selectedMachineId}
 		{machineSelectionEnabled}
+		{disabled}
 		{machineSkills}
 		{chatId}
 		{onTemporaryChange}
@@ -190,7 +193,7 @@
 		{onToolApprovalModeChange}
 		{stopResponse}
 		{createMessagePair}
-		{placeholder}
+		placeholder={placeholder || defaultPlaceholder}
 		{onChange}
 		{onUpload}
 		{onUpdate}
@@ -286,7 +289,7 @@
 											}}
 										>
 											<img
-												src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
+												src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}&v=${model?.info?.updated_at}`}
 												class=" size-9 @sm:size-10 rounded-2xl"
 												aria-hidden="true"
 												draggable="false"

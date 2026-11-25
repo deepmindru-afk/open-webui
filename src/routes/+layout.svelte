@@ -43,6 +43,7 @@
 		desktopEvent
 	} from '$lib/stores';
 	import { refreshChatList, setChatTitle } from '$lib/stores/chatList';
+	import { cachedChats, pendingChatRequest } from '$lib/stores/chatCache';
 	import { clearFolderStates } from '$lib/stores/folderStates';
 	import { getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
@@ -557,11 +558,12 @@
 			?.checkVisibility();
 		if (!event?.internal && ((!isVisible && !$temporaryChat) || isInBackground)) {
 			if (type === 'chat:completion') {
-				const { done, content, output, title } = data;
+				const { done, content, output, title, has_upcoming_reply } = data;
 				const displayTitle = title || $i18n.t('New Chat');
 				const contentPreview = cleanText(removeAllDetails(getOutputText(output) || content || ''));
 
-				if (done) {
+				// Another reply follows, e.g. once a sub-agent reports back.
+				if (done && !has_upcoming_reply) {
 					if (
 						($settings?.notificationSound ?? true) &&
 						($settings?.notificationSoundAlways ?? false) &&
@@ -1062,6 +1064,8 @@
 		const unsubscribeQueueUser = user.subscribe(async (value) => {
 			if (queueUserId !== value?.id) {
 				clearFolderStates();
+				cachedChats.clear();
+				pendingChatRequest.set(null);
 				channelRequestQueues.set({});
 				queueUserId = value?.id;
 			}

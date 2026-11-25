@@ -12,6 +12,7 @@ from open_webui.utils.machines import (
     machine_id_of,
     normalize_machine_id,
     require_chat_folder_machine,
+    template_connection,
 )
 from open_webui.config import (
     CONTEXT_COMPACTION_RETENTION_PERCENTAGE,
@@ -46,7 +47,12 @@ from open_webui.models.shared_chats import ChatShareMode, ShareChatForm, SharedC
 from open_webui.models.tags import TagModel, Tags, get_tag_id
 from open_webui.models.users import UserModel
 from open_webui.socket.main import get_event_emitter
-from open_webui.tasks import get_response_streams_by_chat_id, has_active_tasks, stop_item_tasks
+from open_webui.tasks import (
+    get_response_streams_by_chat_id,
+    has_active_tasks,
+    list_task_ids_by_item_id,
+    stop_item_tasks,
+)
 from open_webui.utils.access_control import has_permission, validate_access_grants
 from open_webui.utils.access_control.folders import has_folder_move_access, has_folder_write_access
 from open_webui.utils.auth import bearer_security, get_admin_user, get_current_user, get_verified_user
@@ -198,7 +204,9 @@ async def shared_chat_response(chat, user=None, db=None):
             if author.get('id') == author_id and author.get('name'):
                 authors[author_id] = {'id': author_id, 'name': author['name']}
         if user is None or (message.get('user_id') or chat.user_id) != user.id:
-            message.pop('meta', None)
+            meta = message.pop('meta', None) or {}
+            if meta.get('internal') is True:
+                message['meta'] = {'internal': True, 'type': meta.get('type')}
     missing_ids = {message['user_id'] for message in messages if message.get('role') == 'user'} - authors.keys()
     if missing_ids:
         for author in await Users.get_users_by_user_ids(list(missing_ids), db=db):
@@ -830,6 +838,9 @@ async def delete_all_user_chats(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
+    for chat_id in await Chats.get_chat_ids_by_user_id(user.id, db=db):
+        await stop_item_tasks(request.app.state.redis, chat_id)
+
     result = await Chats.delete_chats_by_user_id(user.id, db=db)
     if result:
         await publish_event(
@@ -1241,7 +1252,7 @@ async def archive_all_chats(
 async def unarchive_all_chats(
     request: Request, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)
 ):
-    chats = await Chats.get_archived_chats_by_user_id(user.id, db=db)
+    chats = await Chats.get_archived_chat_list_by_user_id(user.id, limit=None, db=db)
     tags = await Tags.get_tags_by_resources('chat', [chat.id for chat in chats], db=db)
     tag_ids = {tag['id'] for chat_tags in tags.values() for tag in chat_tags}
     result = await Chats.unarchive_all_chats_by_user_id(user.id, db=db)
@@ -1437,6 +1448,50 @@ async def compact_chat_by_id(
 
 
 # A view is private to its authenticated viewer, even for shared chats.
+class ChatChildResponse(BaseModel):
+    id: str
+    title: str
+    type: Literal['subagent', 'timer']
+    status: Literal['waiting', 'running', 'scheduled', 'done']
+    created_at: int
+    due_at: int | None = None
+
+
+@router.get('/{id}/children', response_model=list[ChatChildResponse])
+async def get_chat_children(request: Request, id: str, user=Depends(get_verified_user)):
+    """The user's sub-agents and scheduled timers of a chat."""
+    children = await Chats.get_children_by_parent_id(id, user.id)
+    waiting_ids = await ChatMessages.get_chat_ids_with_pending_approval([child.id for child in children])
+    results = []
+    for child in children:
+        meta = child.meta or {}
+        if meta.get('type') == 'subagent':
+            if child.id in waiting_ids:
+                status = 'waiting'
+            # Its task goes on after its reply, to hand over the report.
+            elif await has_active_tasks(
+                request.app.state.redis, child.id
+            ) and await ChatMessages.has_unfinished_assistant_by_chat_id(child.id):
+                status = 'running'
+            else:
+                status = 'done'
+        elif meta.get('type') == 'timer' and meta.get('status') == 'pending':
+            status = 'scheduled'
+        else:
+            continue
+        results.append(
+            ChatChildResponse(
+                id=child.id,
+                title=child.title,
+                type=meta['type'],
+                status=status,
+                created_at=child.created_at,
+                due_at=child.timer_at // 1_000_000_000 if child.timer_at else None,
+            )
+        )
+    return results
+
+
 @router.get('/{id}/view')
 async def get_chat_view(
     id: str,
@@ -1495,6 +1550,13 @@ async def get_chat_by_id(
             await get_response_streams_by_chat_id(request.app.state.redis, id),
         )
         data['context_usage'] = await get_chat_context_usage(chat)
+        data['task_ids'] = (
+            await Chats.filter_task_ids_by_user_id(
+                chat, user.id, await list_task_ids_by_item_id(request.app.state.redis, id)
+            )
+            if data['write_access']
+            else []
+        )
         return data
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.NOT_FOUND)
@@ -1535,6 +1597,9 @@ async def update_chat_by_id(
     if chat:
         if machine_id_of(form_data.chat) != machine_id_of(chat.chat):
             await require_chat_folder_machine(chat.folder_id, machine_id_of(form_data.chat))
+            machine_id = machine_id_of(form_data.chat)
+            if chat.user_id != user.id and machine_id and machine_id.startswith('template:'):
+                await template_connection(user, machine_id)
         directory = form_data.chat.get('working_directory')
         if directory and directory != (chat.chat or {}).get('working_directory'):
             folder_directory = await get_folder_directory(chat.folder_id)
@@ -1553,6 +1618,9 @@ async def update_chat_by_id(
                 )
                 or chat
             )
+        if chat is not None and 'history' not in chat.chat:
+            # Clients replace their chat with this response, so it carries the messages too.
+            chat = await Chats.get_chat_by_id(id) or chat
 
         await publish_event(
             request,
@@ -1631,13 +1699,20 @@ async def update_chat_message_by_id(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
+    message = await Chats.get_message_by_id_and_message_id(id, message_id)
+    if message and (message.get('user_id') or chat.user_id) != chat.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
     updates = {}
     if form_data.content is not None:
         updates['content'] = form_data.content
     if form_data.voice is not None:
         if len(JSONCodec.dumps(form_data.voice)) > 100000:
             raise HTTPException(400, 'Voice metadata is too large')
-        if not await Chats.get_message_by_id_and_message_id(id, message_id):
+        if not message:
             raise HTTPException(404, ERROR_MESSAGES.NOT_FOUND)
         updates['meta'] = {'voice': form_data.voice}
     if not updates:
@@ -1672,7 +1747,7 @@ async def update_chat_message_by_id(
         subject_id=message_id,
         data={'chat_id': id, 'content_preview': (form_data.content or '')[:300]},
     )
-    return await chat_response(chat, db=db)
+    return await chat_response(await Chats.get_chat_by_id(id) or chat, db=db)
 
 
 @router.delete('/{id}/messages/{message_id}', response_model=ChatResponse | None)
@@ -1743,6 +1818,13 @@ async def send_chat_message_event_by_id(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
+    message = await Chats.get_message_by_id_and_message_id(id, message_id)
+    if message and (message.get('user_id') or chat.user_id) != chat.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
     event_emitter = await get_event_emitter(
         {
             'user_id': chat.user_id,
@@ -1802,15 +1884,16 @@ async def delete_chat_by_id(
     # deleting the chat to prevent orphaned requests.
     await stop_item_tasks(request.app.state.redis, id)
 
-    # Cascade to internal child chats spawned from this one.
-    for child_id in await Chats.get_internal_chat_ids_by_parent_id(id, chat.user_id):
-        await stop_item_tasks(request.app.state.redis, child_id)
-        await Chats.delete_chat_by_id_and_user_id(child_id, chat.user_id)
-
+    # Delete first so stopped sub-agents have no chat to report back to.
     if user.role == 'admin':
         result = await Chats.delete_chat_by_id(id, db=db)
     else:
         result = await Chats.delete_chat_by_id_and_user_id(id, user.id, db=db)
+
+    # Cascade to internal child chats spawned from this one.
+    for child_id in await Chats.get_internal_chat_ids_by_parent_id(id, chat.user_id):
+        await stop_item_tasks(request.app.state.redis, child_id)
+        await Chats.delete_chat_by_id_and_user_id(child_id, chat.user_id)
 
     if result:
         await publish_event(
@@ -1987,6 +2070,8 @@ async def fork_chat_by_id(
 
     if is_owner and chat.pinned:
         fork = await Chats.toggle_chat_pinned_by_id(fork.id, db=db) or fork
+    if 'history' not in fork.chat:
+        fork = await Chats.get_chat_by_id(fork.id) or fork
 
     await publish_event(
         request,

@@ -15,7 +15,7 @@ from urllib.parse import unquote
 
 from fastapi import HTTPException, Request
 
-from open_webui.utils.machines import automation_machine_of, is_machine_ref, strip_machine_prefix
+from open_webui.utils.machines import automation_machine_of, is_machine_ref, machine_id_of, strip_machine_prefix
 from open_webui.env import (
     KNOWLEDGE_GREP_MAX_MATCHES,
     VIEW_FILE_DEFAULT_MAX_CHARS,
@@ -23,13 +23,14 @@ from open_webui.env import (
 )
 from open_webui.events import EVENTS, publish_event
 from open_webui.models.channels import Channel, ChannelMember, Channels
+from open_webui.models.chat_messages import ChatMessages
 from open_webui.models.chats import Chats, chat_search_content_query, chat_search_terms
 from open_webui.models.config import Config
 from open_webui.models.groups import Groups
 from open_webui.models.memories import Memories
 from open_webui.models.messages import Message, Messages
 from open_webui.models.notes import NotePageConflict, Notes, get_content_files, get_page, matching_page
-from open_webui.models.users import UserModel, Users
+from open_webui.models.users import UserModel, Users, UserSettings
 from open_webui.retrieval.utils import filter_source_metadata, get_content_from_url
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
 from open_webui.routers.images import (
@@ -1910,9 +1911,9 @@ async def view_chat(
 
 async def delegate_task(
     task: str,
+    title: str = '',
     context: str = '',
     file_ids: list[str] | None = None,
-    background: bool = False,
     model_id: str | None = None,
     __request__: Request = None,
     __user__: dict = None,
@@ -1921,15 +1922,16 @@ async def delegate_task(
     __message_id__: str = None,
 ) -> str:
     """
-    Delegate focused work to a parallel sub-agent using the current tools.
+    Delegate focused work to a parallel sub-agent using the current tools. Do not redo that work yourself; answer once
+    its report is in.
 
     :param task: The specific task for the sub-agent to complete
+    :param title: A short name for the task, 3 to 6 words
     :param context: Relevant context, decisions, or file paths for the task
     :param file_ids: Attached file IDs the sub-agent needs. Use this for images or files;
         do not put file IDs only in context.
-    :param background: Return immediately and continue this chat when the sub-agent finishes
     :param model_id: ID of an available sub-agent model. Omit to use the current model
-    :return: Foreground result text, or a JSON dispatch handle for background work
+    :return: The sub-agent's chat ID
     """
     if __request__ is None:
         return 'Error: request context not available.'
@@ -1941,7 +1943,7 @@ async def delegate_task(
     return await delegate(
         task,
         context,
-        background,
+        title=title,
         file_ids=file_ids,
         model_id=model_id,
         request=__request__,
@@ -1950,6 +1952,59 @@ async def delegate_task(
         parent_chat_id=__chat_id__ or '',
         parent_message_id=__message_id__,
     )
+
+
+async def send_message(
+    chat_id: str,
+    message: str,
+    __request__: Request = None,
+    __user__: dict = None,
+    __chat_id__: str = None,
+) -> str:
+    """
+    Send a message to another of the user's chats, a sub-agent or the lead agent. It reads the message between tool
+    calls if it is working and wakes up if it is idle. A message you receive shows the chat it is from. Answer it only
+    if it asks for something; never send thanks or acknowledgements.
+
+    :param chat_id: The ID of the chat
+    :param message: The message. The other chat cannot see this one, so include what it needs
+    :return: Whether the message was sent
+    """
+    from open_webui.utils.automations import _resolve_model_defaults
+    from open_webui.utils.subagents import insert_internal_message
+    from open_webui.utils.tool_approval import build_tool_approval_resume_payload
+
+    user = UserModel(**__user__)
+    chat = await Chats.get_chat_by_id_and_user_id(chat_id, user.id)
+    if not chat or chat_id == __chat_id__:
+        return 'Error: chat not found.'
+    if await ChatMessages.get_chat_ids_with_pending_approval([chat_id]):
+        return 'Error: that chat is waiting for the user.'
+
+    try:
+        settings = await build_tool_approval_resume_payload(chat_id, chat.current_message_id, chat=chat)
+        defaults = await _resolve_model_defaults(__request__.app, settings['model'])
+        ui = ((await Users.get_user_by_id(user.id)).settings or UserSettings()).ui or {}
+        settings['params'] = {**(ui.get('params') or {}), **(chat.chat.get('params') or {})}
+        title = (await Chats.get_chat_title_by_id(__chat_id__) or '').replace('"', "'")
+        await insert_internal_message(
+            __request__,
+            user,
+            chat_id,
+            chat.current_message_id,
+            f'<message from="{__chat_id__}" title="{title}">\n{message.strip()}\n</message>',
+            {'type': 'message'},
+            {
+                **settings,
+                **defaults,
+                'model_id': settings['model'],
+                'machine_id': machine_id_of(chat.chat) or defaults.get('machine_id'),
+                'chat_context': {key: settings[key] for key in ('messages', 'params', 'chat_variables')},
+            },
+        )
+    except HTTPException as exc:
+        return f'Error: {exc.detail}'
+    return 'Sent.'
 
 
 async def timer(

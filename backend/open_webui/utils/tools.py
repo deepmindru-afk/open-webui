@@ -92,6 +92,7 @@ from open_webui.tools.builtin import (
     search_notes,
     search_users,
     search_web,
+    send_message,
     timer,
     toggle_automation,
     update_automation,
@@ -702,7 +703,6 @@ async def get_builtin_tools(
         'calendar.enable',
         'ui.enable_user_webhooks',
         'subagents.enable',
-        'subagents.background_enabled',
         'chat.visualizations.prompt_template',
     )
 
@@ -766,7 +766,7 @@ async def get_builtin_tools(
     if is_builtin_tool_enabled('time'):
         builtin_functions.extend([get_current_timestamp, calculate_timestamp])
 
-    if is_builtin_tool_enabled('user_input', True):
+    if is_builtin_tool_enabled('user_input', True) and getattr(request.state, 'subagent', False) is not True:
         builtin_functions.append(ask_user)
 
     metadata = extra_params.get('__metadata__') or {}
@@ -842,11 +842,13 @@ async def get_builtin_tools(
     if (
         is_builtin_tool_enabled('subagents')
         and config.get('subagents.enable')
-        and getattr(request.state, 'internal', False) is not True
         and not is_temporary_chat_id(metadata.get('chat_id'))
         and await has_user_permission('subagents')
     ):
-        builtin_functions.extend([delegate_task, timer])
+        if is_saved_chat_id(metadata.get('chat_id')):
+            builtin_functions.append(send_message)
+        if not getattr(request.state, 'subagent', False):
+            builtin_functions.extend([delegate_task, timer])
 
     # Add memory tools when memory is enabled and the model allows this builtin category.
     if (
@@ -921,8 +923,10 @@ async def get_builtin_tools(
         builtin_functions.append(execute_code)
 
     # Notes tools - search, view, create, and update user's notes
-    if is_note_chat or (
-        is_builtin_tool_enabled('notes') and config.get('notes.enable') and await has_user_permission('notes')
+    if (
+        (is_note_chat or is_builtin_tool_enabled('notes'))
+        and config.get('notes.enable')
+        and await has_user_permission('notes')
     ):
         builtin_functions.extend([search_notes, view_note, write_note, replace_note_content])
 
@@ -984,7 +988,7 @@ async def get_builtin_tools(
     ):
         builtin_functions.append(notify)
 
-    if getattr(request.state, 'internal', False) is True:
+    if getattr(request.state, 'internal', False) is True or getattr(request.state, 'subagent', False) is True:
         from open_webui.utils.subagents import MUTATING_MEMORY_TOOLS
 
         builtin_functions = [func for func in builtin_functions if func.__name__ not in MUTATING_MEMORY_TOOLS]
@@ -1015,11 +1019,6 @@ async def get_builtin_tools(
 
             parameters = spec.get('parameters', {})
             properties = parameters.get('properties', {})
-            if not config.get('subagents.background_enabled'):
-                properties.pop('background', None)
-                if isinstance(parameters.get('required'), list):
-                    parameters['required'] = [name for name in parameters['required'] if name != 'background']
-
             subagent_models = await get_subagent_models(request, UserModel(**user), model) if user else []
             if subagent_models:
                 properties['model_id']['enum'] = [model['id'] for model in subagent_models]

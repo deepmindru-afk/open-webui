@@ -224,7 +224,7 @@ from open_webui.utils.access_control import has_permission
 from open_webui.utils.access_control.folders import has_folder_write_access
 from open_webui.utils.actions import chat_action as chat_action_handler
 from open_webui.utils.asgi_middleware import AppHTTPMiddleware, BrowserCORSMiddleware
-from open_webui.utils.audit import AuditLevel, AuditLoggingMiddleware
+from open_webui.utils.audit import AuditLevel, AuditLoggingMiddleware, set_audit_model
 from open_webui.utils.auth import (
     create_admin_user,
     decode_token,
@@ -1099,6 +1099,7 @@ async def embeddings(request: Request, form_data: dict, user=Depends(get_verifie
     # Make sure models are loaded in app state
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
+    set_audit_model(form_data.get('model'))
     # Use generic dispatcher in utils.embeddings
     return await generate_embeddings(request, form_data, user)
 
@@ -1114,7 +1115,7 @@ async def chat_completion(
         await get_all_models(request, user=user)
 
     model_id = form_data.get('model', None)
-    request.state.model_id = model_id
+    set_audit_model(model_id)
     tasks = form_data.pop('background_tasks', None)
     normalize_machine_id(form_data)
 
@@ -1294,6 +1295,8 @@ async def chat_completion(
         chat_id = form_data.pop('chat_id', None) or ''
         chat_variables = form_data.pop('chat_variables', None)
         existing_chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
+        # Also when the user answers or writes in the sub-agent's own chat.
+        request.state.subagent = bool(existing_chat and (existing_chat.meta or {}).get('type') == 'subagent')
         if existing_chat and existing_chat.user_id != user.id:
             chat_variables = {}
         elif chat_variables is None:
@@ -1318,6 +1321,7 @@ async def chat_completion(
             'user_agent': request.headers.get('user-agent', '') or '',
             'client_ip': request.client.host if request.client else '',
             'internal': getattr(request.state, 'internal', False) is True,
+            'subagent': request.state.subagent,
             'chat_id': chat_id,
             'user_message': user_message,
             'user_message_id': user_message.get('id') if user_message else None,
@@ -2151,7 +2155,7 @@ async def generate_messages(
     Anthropic's x-api-key header (via middleware translation).
     """
     requested_model = form_data.get('model', '')
-    request.state.model_id = requested_model
+    set_audit_model(requested_model)
     input_tokens = None
     try:
         input_tokens = await openai.count_anthropic_tokens(request, form_data, user)
@@ -2414,18 +2418,6 @@ async def get_app_config(request: Request):
         group_defaults, _ = resolve_group_default_models(
             await Groups.get_groups_by_member_id(user.id, include_inherited=True)
         )
-        if group_defaults:
-            try:
-                models = (await get_models(request, user=user))['data']
-                available = {
-                    model['id']
-                    for model in models
-                    if not ((model.get('info') or {}).get('meta') or {}).get('hidden', False)
-                }
-                group_defaults = [model_id for model_id in group_defaults if model_id in available]
-            except Exception:
-                log.exception('Unable to resolve available group default models')
-                group_defaults = None
 
     onboarding = False
     if user is None:
@@ -2607,7 +2599,9 @@ async def get_app_config(request: Request):
         },
         **(
             {
+                # Availability is checked by the client, against the model list it loads.
                 'default_models': ','.join(group_defaults) if group_defaults else config.get('ui.default_models'),
+                'fallback_default_models': config.get('ui.default_models'),
                 'default_pinned_models': config.get('ui.default_pinned_models'),
                 'default_prompt_suggestions': config.get('ui.prompt_suggestions'),
                 'default_prompt_suggestions_i18n': config.get('ui.prompt_suggestions_i18n'),
