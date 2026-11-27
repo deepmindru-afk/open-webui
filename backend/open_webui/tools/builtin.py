@@ -76,7 +76,7 @@ from open_webui.utils.access_control.files import has_access_to_note_files
 from open_webui.utils.access_control.notes import has_note_access
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.json_codec import JSONCodec
-from open_webui.utils.memory import get_memory_folder
+from open_webui.utils.memory import get_chat_search_condition, get_memory_folder
 from open_webui.utils.notifications import notify_target
 from open_webui.utils.sanitize import sanitize_code
 from open_webui.utils.skill_files import SkillFile, SkillFileOperation, skill_content_page, skill_overview
@@ -1796,6 +1796,7 @@ async def search_chats(
             include_archived=False,
             skip=0,
             limit=count * 3,  # Fetch more for filtering
+            where=await get_chat_search_condition(UserModel(**__user__), getattr(__request__.state, 'metadata', None)),
         )
 
         matched = []
@@ -1860,8 +1861,11 @@ async def view_chat(
     try:
         user_id = __user__.get('id')
 
-        chat = await Chats.get_chat_by_id_and_user_id(chat_id, user_id)
-
+        chat = await Chats.get_chat_by_id_and_user_id(
+            chat_id,
+            user_id,
+            where=await get_chat_search_condition(UserModel(**__user__), getattr(__request__.state, 'metadata', None)),
+        )
         if not chat:
             return JSONCodec.dumps({'error': 'Chat not found or access denied'})
 
