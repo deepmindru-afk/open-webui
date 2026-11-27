@@ -781,10 +781,13 @@
 		focusMainChat();
 		if (!isLargeScreen) showTabs.set(false);
 	};
-	$: if (`${$page.state.tab} ${$page.url.pathname}` !== historyEntry) {
-		historyEntry = `${$page.state.tab} ${$page.url.pathname}`;
+	const onHistoryEntryChange = (entry: string) => {
+		if (entry === historyEntry) return;
+		historyEntry = entry;
 		if (!get(navigating)) showAddressed();
-	}
+	};
+	// Only $page triggers this, since addHistoryEntry records its entry before $page catches up.
+	$: onHistoryEntryChange(`${$page.state.tab} ${$page.url.pathname}`);
 	const activateFilesOnDrag = (node: HTMLElement, tab: Tab) => {
 		if (tab.kind !== 'files') return;
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1706,7 +1709,8 @@
 		{
 			kind: 'chat',
 			label: $i18n.t('New Chat'),
-			available: canOpenChat
+			// A new chat here is saved into the folder, which a read-only folder refuses
+			available: canOpenChat && (!mainTabFolder || !!mainTabFolder.canEdit)
 		},
 		{ kind: 'artifacts', label: $i18n.t('Artifacts'), available: showArtifactsTab },
 		{ kind: 'preview', label: $i18n.t('Preview'), available: showPreviewTab },
